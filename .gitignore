@@ -256,3 +256,6 @@ dist/
 *.key
 *.pem
 secrets.json
+
+# Frontend repository (managed separately)
+frontend/
