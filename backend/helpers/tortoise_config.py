@@ -12,8 +12,10 @@ TORTOISE_ORM = {
                 "models.restaurant",
                 "models.menu",
                 "models.menu_item",
+                "models.menu_item_addon",
                 "models.order",
                 "models.order_item",
+                "models.order_item_addon",
                 "models.qr_code",
                 "aerich.models"
             ],

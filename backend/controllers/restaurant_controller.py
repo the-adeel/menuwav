@@ -4,6 +4,7 @@ from typing import List
 from models.restaurant import Restaurant, RestaurantIn_Pydantic, Restaurant_Pydantic
 from models.menu import Menu, Menu_Pydantic
 from models.menu_item import MenuItem, MenuItem_Pydantic
+from models.menu_item_addon import MenuItemAddon, MenuItemAddon_Pydantic
 from models.user import User, Role
 from services.auth import get_current_user
 
@@ -126,15 +127,23 @@ async def get_restaurant(restaurant_id: int):
             "is_approved": getattr(restaurant, 'is_approved', False)
         }
     
-    # Get menus with items
+    # Get menus with items and add-ons
     menus = await Menu.filter(restaurant=restaurant).prefetch_related("items")
     menus_data = []
     for menu in menus:
-        items = await menu.items.all()
+        items = await menu.items.all().prefetch_related("addons")
+        items_data = []
+        for item in items:
+            item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
+            addons = await item.addons.all()
+            items_data.append({
+                **item_dict.dict(),
+                "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons]
+            })
         menu_dict = await Menu_Pydantic.from_tortoise_orm(menu)
         menus_data.append({
             **menu_dict.dict(),
-            "items": [await MenuItem_Pydantic.from_tortoise_orm(i) for i in items]
+            "items": items_data
         })
     
     restaurant_dict["menus"] = menus_data

@@ -8,8 +8,10 @@ from dotenv import load_dotenv
 
 from models.order import Order, Order_Pydantic, OrderStatus
 from models.order_item import OrderItem, OrderItem_Pydantic
+from models.order_item_addon import OrderItemAddon, OrderItemAddon_Pydantic
 from models.restaurant import Restaurant
 from models.menu_item import MenuItem
+from models.menu_item_addon import MenuItemAddon
 from models.user import User, Role
 from services.auth import get_current_user
 
@@ -40,6 +42,7 @@ router = APIRouter()
 class OrderItemRequest(BaseModel):
     menu_item_id: int
     quantity: int
+    selected_addon_ids: List[int] = []
 
 class CreateOrderRequest(BaseModel):
     restaurant_id: int
@@ -78,13 +81,35 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         if item_req.quantity < 1:
             raise HTTPException(status_code=400, detail="Quantity must be at least 1")
         
-        item_total = Decimal(str(menu_item.price)) * item_req.quantity
+        # Validate and get selected add-ons
+        addon_total = Decimal('0.00')
+        selected_addons = []
+        if item_req.selected_addon_ids:
+            addons = await MenuItemAddon.filter(
+                id__in=item_req.selected_addon_ids,
+                menu_item=menu_item,
+                is_available=True
+            ).all()
+            
+            if len(addons) != len(item_req.selected_addon_ids):
+                raise HTTPException(status_code=400, detail="One or more selected add-ons are invalid or unavailable")
+            
+            for addon in addons:
+                addon_total += Decimal(str(addon.price_adjustment))
+                selected_addons.append({
+                    'addon': addon,
+                    'price_at_time': addon.price_adjustment
+                })
+        
+        # Calculate item total: (item_price + addon_total) * quantity
+        item_total = (Decimal(str(menu_item.price)) + addon_total) * item_req.quantity
         total += item_total
         
         order_items_data.append({
             'menu_item': menu_item,
             'quantity': item_req.quantity,
-            'price_at_time': menu_item.price
+            'price_at_time': menu_item.price,
+            'selected_addons': selected_addons
         })
     
     # Create order
@@ -96,29 +121,47 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         total=total
     )
     
-    # Create order items
+    # Create order items and add-ons
     for item_data in order_items_data:
-        await OrderItem.create(
+        order_item = await OrderItem.create(
             order=order,
             menu_item=item_data['menu_item'],
             quantity=item_data['quantity'],
             price_at_time=item_data['price_at_time']
         )
+        
+        # Create order item add-ons
+        for addon_data in item_data['selected_addons']:
+            await OrderItemAddon.create(
+                order_item=order_item,
+                addon=addon_data['addon'],
+                price_at_time=addon_data['price_at_time']
+            )
     
     # Fetch order with items for response
-    order_items = await OrderItem.filter(order=order).prefetch_related("menu_item")
+    order_items = await OrderItem.filter(order=order).prefetch_related("menu_item", "addons")
     order_dict = await Order_Pydantic.from_tortoise_orm(order)
     items_data = []
     for oi in order_items:
         item_dict = await OrderItem_Pydantic.from_tortoise_orm(oi)
         menu_item_dict = await oi.menu_item
+        addons = await oi.addons.all().prefetch_related("addon")
+        addons_data = []
+        for oa in addons:
+            addon = await oa.addon
+            addons_data.append({
+                "id": addon.id,
+                "name": addon.name,
+                "price_adjustment": str(oa.price_at_time)
+            })
         items_data.append({
             **item_dict.dict(),
             "menu_item": {
                 "id": menu_item_dict.id,
                 "name": menu_item_dict.name,
                 "description": menu_item_dict.description
-            }
+            },
+            "addons": addons_data
         })
     
     return {
@@ -136,18 +179,28 @@ async def get_my_orders(user: User = Depends(get_current_user)):
     for order in orders:
         order_dict = await Order_Pydantic.from_tortoise_orm(order)
         restaurant = await order.restaurant
-        items = await order.items.all().prefetch_related("menu_item")
+        items = await order.items.all().prefetch_related("menu_item", "addons")
         items_data = []
         for oi in items:
             item_dict = await OrderItem_Pydantic.from_tortoise_orm(oi)
             menu_item = await oi.menu_item
+            addons = await oi.addons.all().prefetch_related("addon")
+            addons_data = []
+            for oa in addons:
+                addon = await oa.addon
+                addons_data.append({
+                    "id": addon.id,
+                    "name": addon.name,
+                    "price_adjustment": str(oa.price_at_time)
+                })
             items_data.append({
                 **item_dict.dict(),
                 "menu_item": {
                     "id": menu_item.id,
                     "name": menu_item.name,
                     "description": menu_item.description
-                }
+                },
+                "addons": addons_data
             })
         result.append({
             **order_dict.dict(),
@@ -185,18 +238,28 @@ async def get_restaurant_orders(
     for order in orders:
         order_dict = await Order_Pydantic.from_tortoise_orm(order)
         customer = await order.customer if order.customer_id else None
-        items = await order.items.all().prefetch_related("menu_item")
+        items = await order.items.all().prefetch_related("menu_item", "addons")
         items_data = []
         for oi in items:
             item_dict = await OrderItem_Pydantic.from_tortoise_orm(oi)
             menu_item = await oi.menu_item
+            addons = await oi.addons.all().prefetch_related("addon")
+            addons_data = []
+            for oa in addons:
+                addon = await oa.addon
+                addons_data.append({
+                    "id": addon.id,
+                    "name": addon.name,
+                    "price_adjustment": str(oa.price_at_time)
+                })
             items_data.append({
                 **item_dict.dict(),
                 "menu_item": {
                     "id": menu_item.id,
                     "name": menu_item.name,
                     "description": menu_item.description
-                }
+                },
+                "addons": addons_data
             })
         result.append({
             **order_dict.dict(),
