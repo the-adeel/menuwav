@@ -198,3 +198,63 @@ async def register(user_in: UserIn_Pydantic, current_user: User = Depends(get_cu
     hashed = bcrypt.hashpw(user_in.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     user = await User.create(username=user_in.username, password=hashed, role=user_in.role)
     return await User_Pydantic.from_tortoise_orm(user)
+
+class CreateSuperadminRequest(BaseModel):
+    username: str
+    password: str
+    admin_key: str
+
+@router.post("/create-superadmin")
+async def create_superadmin(request: CreateSuperadminRequest):
+    """
+    Create a superadmin user. Protected by ADMIN_CREATION_KEY from environment.
+    This endpoint should be removed or disabled after initial setup.
+    """
+    # Check the admin key from environment
+    ADMIN_CREATION_KEY = os.getenv("ADMIN_CREATION_KEY")
+    if not ADMIN_CREATION_KEY:
+        raise HTTPException(status_code=500, detail="Admin creation key not configured")
+    
+    if request.admin_key != ADMIN_CREATION_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    
+    # Check if username already exists
+    if await User.exists(username=request.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
+    
+    try:
+        # Hash password
+        hashed = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        # Create superadmin user directly
+        # Handle cases where email/phone columns might not exist
+        try:
+            user = await User.create(
+                username=request.username,
+                password=hashed,
+                role=Role.SUPERADMIN,
+                email=None,
+                phone=None
+            )
+        except Exception as user_err:
+            # If email/phone columns don't exist, create without them
+            if "email" in str(user_err) or "phone" in str(user_err):
+                user = await User.create(
+                    username=request.username,
+                    password=hashed,
+                    role=Role.SUPERADMIN
+                )
+            else:
+                raise
+        
+        return {
+            "message": "Superadmin created successfully",
+            "username": user.username,
+            "id": user.id,
+            "role": user.role.value if hasattr(user.role, 'value') else str(user.role)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Create superadmin error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create superadmin: {str(e)}")
