@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 from pathlib import Path
 import tempfile
 import os
@@ -245,3 +245,46 @@ async def delete_addon(restaurant_id: int, menu_id: int, item_id: int, addon_id:
     
     await addon.delete()
     return {"message": "Add-on deleted successfully"}
+
+@router.delete("/{restaurant_id}/menus/{menu_id}/items/{item_id}")
+async def delete_item(restaurant_id: int, menu_id: int, item_id: int, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
+    if not menu:
+        raise HTTPException(404, "Menu not found")
+    
+    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
+    if not menu_item:
+        raise HTTPException(404, "Menu item not found")
+    
+    await menu_item.delete()
+    return {"message": "Menu item deleted successfully"}
+
+@router.post("/{restaurant_id}/menus/{menu_id}/items/delete")
+async def delete_items_bulk(
+    restaurant_id: int, 
+    menu_id: int, 
+    item_ids: list[int] = Body(...), 
+    user: User = Depends(get_current_user)
+):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
+    if not menu:
+        raise HTTPException(404, "Menu not found")
+    
+    # Delete all items if item_ids is empty or contains -1 (delete all)
+    if not item_ids or -1 in item_ids:
+        deleted_count = await MenuItem.filter(menu=menu).count()
+        await MenuItem.filter(menu=menu).delete()
+        return {"message": f"All {deleted_count} menu items deleted successfully", "deleted_count": deleted_count}
+    
+    # Delete specific items
+    deleted_count = await MenuItem.filter(id__in=item_ids, menu=menu).count()
+    await MenuItem.filter(id__in=item_ids, menu=menu).delete()
+    return {"message": f"{deleted_count} menu item(s) deleted successfully", "deleted_count": deleted_count}

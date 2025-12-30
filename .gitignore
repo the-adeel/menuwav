@@ -95,7 +95,7 @@ ENV/
 env.bak/
 venv.bak/
 backend/migrations/
-
+backend/uploads/
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -257,6 +257,128 @@ dist/
 *.key
 *.pem
 secrets.json
+config.json
+*.secret
+*.credentials
+
+# Environment and configuration files
+.env
+.env.*
+!.env.example
+!.env.template
+*.env
+.envrc
+.env.local
+.env.*.local
+
+# Deployment files
+docker-compose.override.yml
+docker-compose.local.yml
+*.deploy
+deploy/
+deployment/
+.vercel
+.netlify
+.railway
+.render
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*~
+
+# Excel and Office files (if not needed in repo)
+*.xlsx
+*.xls
+*.docx
+*.doc
+
+# Database backups
+*.sql.gz
+*.dump
+*.backup.sql
+
+# SSL/TLS certificates
+*.crt
+*.csr
+*.p12
+*.pfx
+*.cer
+
+# API keys and tokens
+api_keys.txt
+tokens.txt
+.secrets
+
+# Build and deployment artifacts
+*.zip
+*.tar
+*.tar.gz
+*.rar
+build/
+dist/
+out/
+.next/
+.nuxt/
+.vite/
+
+# Logs (comprehensive)
+logs/
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Windows specific (comprehensive)
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+
+# macOS specific (comprehensive)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux specific
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# IDE and editor files (comprehensive)
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+.project
+.classpath
+.settings/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*.swn
 
 # Frontend repository (managed separately)
 frontend/
