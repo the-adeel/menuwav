@@ -74,6 +74,28 @@ async def create_menu(restaurant_id: int, menu_in: MenuIn_Pydantic, user: User =
     menu = await Menu.create(restaurant=restaurant, **menu_in.dict())
     return await Menu_Pydantic.from_tortoise_orm(menu)
 
+@router.delete("/{restaurant_id}/menus/{menu_id}")
+async def delete_menu(restaurant_id: int, menu_id: int, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
+    if not menu:
+        raise HTTPException(404, "Menu not found")
+    
+    # Delete all addons for all items in this menu
+    menu_items = await MenuItem.filter(menu=menu).all()
+    for item in menu_items:
+        await MenuItemAddon.filter(menu_item=item).delete()
+    
+    # Delete all items in this menu
+    await MenuItem.filter(menu=menu).delete()
+    
+    # Delete the menu itself
+    await menu.delete()
+    return {"message": "Menu deleted successfully"}
+
 @router.post("/{restaurant_id}/import")
 async def import_menu_items(
     restaurant_id: int,
