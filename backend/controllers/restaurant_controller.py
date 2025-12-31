@@ -98,6 +98,26 @@ async def disapprove_restaurant(restaurant_id: int, user: User = Depends(get_cur
     
     return {"message": "Restaurant and owner deleted successfully"}
 
+@router.delete("/{restaurant_id}")
+async def delete_restaurant(restaurant_id: int, user: User = Depends(get_current_user)):
+    if user.role != Role.SUPERADMIN:
+        raise HTTPException(status_code=403, detail="Only superadmin can delete restaurants")
+    
+    restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    
+    # Get owner before deleting restaurant
+    owner = await restaurant.owner
+    
+    # Delete restaurant (this will cascade delete related data like menus, items, orders, etc.)
+    await restaurant.delete()
+    
+    # Delete the restaurant owner user
+    await owner.delete()
+    
+    return {"message": "Restaurant and owner deleted successfully"}
+
 @router.get("/my-restaurant")
 async def get_my_restaurant(user: User = Depends(get_current_user)):
     if user.role != Role.RESTAURANT_ADMIN:
