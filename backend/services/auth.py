@@ -20,12 +20,21 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
+        if not token:
+            print("get_current_user: No token provided")
+            raise credentials_exception
+        if not SECRET_KEY:
+            print("get_current_user: SECRET_KEY is not set")
+            raise credentials_exception
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         role_str: str = payload.get("role")
         if username is None:
+            print(f"get_current_user: No username in token payload: {payload}")
             raise credentials_exception
-    except JWTError:
+        print(f"get_current_user: Successfully decoded token for user '{username}' with role '{role_str}'")
+    except JWTError as e:
+        print(f"get_current_user: JWT decode error: {e}, token length: {len(token) if token else 0}")
         raise credentials_exception
 
     # Try to get user - if email/phone columns don't exist, use raw query
