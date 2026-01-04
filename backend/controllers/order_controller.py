@@ -6,7 +6,7 @@ import jwt
 import os
 from dotenv import load_dotenv
 
-from models.order import Order, Order_Pydantic, OrderStatus
+from models.order import Order, Order_Pydantic, OrderStatus, OrderType, PaymentStatus, PaymentMethod
 from models.order_item import OrderItem, OrderItem_Pydantic
 from models.order_item_addon import OrderItemAddon, OrderItemAddon_Pydantic
 from models.restaurant import Restaurant
@@ -47,10 +47,14 @@ class OrderItemRequest(BaseModel):
 class CreateOrderRequest(BaseModel):
     restaurant_id: int
     table_number: Optional[int] = None
+    order_type: Optional[str] = "pickup"  # "pickup" or "delivery"
     items: List[OrderItemRequest]
 
 class UpdateOrderStatusRequest(BaseModel):
     status: str
+
+class UpdatePaymentMethodRequest(BaseModel):
+    payment_method: str  # "online" or "cash"
 
 @router.post("/orders/")
 async def create_order(order_data: CreateOrderRequest, customer: Optional[User] = Depends(get_optional_user)):
@@ -112,13 +116,21 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
             'selected_addons': selected_addons
         })
     
+    # Validate order_type
+    try:
+        order_type = OrderType(order_data.order_type) if order_data.order_type else OrderType.PICKUP
+    except ValueError:
+        order_type = OrderType.PICKUP
+    
     # Create order
     order = await Order.create(
         restaurant=restaurant,
         customer=customer,
         table_number=order_data.table_number,
         status=OrderStatus.PENDING,
-        total=total
+        total=total,
+        order_type=order_type,
+        payment_status=PaymentStatus.PENDING
     )
     
     # Create order items and add-ons
@@ -288,4 +300,55 @@ async def update_order_status(order_id: int, status_data: UpdateOrderStatusReque
     
     await order.save()
     return await Order_Pydantic.from_tortoise_orm(order)
+
+@router.patch("/orders/{order_id}/payment-method")
+async def update_order_payment_method(
+    order_id: int,
+    payment_data: UpdatePaymentMethodRequest,
+    user: Optional[User] = Depends(get_optional_user)
+):
+    """Update the payment method for an order (e.g., for cash payments)"""
+    order = await Order.get_or_none(id=order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # If user is authenticated, verify they own the order
+    if user:
+        if user.role == Role.CUSTOMER and order.customer_id != user.id:
+            raise HTTPException(status_code=403, detail="You don't have access to this order")
+    
+    if order.payment_status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Cannot change payment method for an order that is not pending payment.")
+
+    try:
+        order.payment_method = PaymentMethod(payment_data.payment_method)
+        if payment_data.payment_method == PaymentMethod.CASH.value:
+            # For cash, payment is considered "paid" from the customer's perspective
+            # but still pending for restaurant to collect
+            order.payment_status = PaymentStatus.PAID 
+        await order.save()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payment method")
+    
+    return await Order_Pydantic.from_tortoise_orm(order)
+
+@router.get("/orders/{order_id}/payment-status")
+async def get_order_payment_status(
+    order_id: int, 
+    user: Optional[User] = Depends(get_optional_user)
+):
+    """Get the payment status of a specific order"""
+    order = await Order.get_or_none(id=order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # If user is authenticated, verify they own the order
+    if user:
+        if user.role == Role.CUSTOMER and order.customer_id != user.id:
+            raise HTTPException(status_code=403, detail="You don't have access to this order")
+    
+    return {
+        "payment_status": order.payment_status.value if hasattr(order.payment_status, 'value') else str(order.payment_status),
+        "payment_method": order.payment_method.value if order.payment_method and hasattr(order.payment_method, 'value') else (str(order.payment_method) if order.payment_method else None)
+    }
 

@@ -13,10 +13,13 @@ TORTOISE_ORM = {
                 "models.menu",
                 "models.menu_item",
                 "models.menu_item_addon",
+                "models.ingredient",
+                "models.menu_item_ingredient",
                 "models.order",
                 "models.order_item",
                 "models.order_item_addon",
                 "models.qr_code",
+                "models.platform_settings",
                 "aerich.models"
             ],
             "default_connection": "default",

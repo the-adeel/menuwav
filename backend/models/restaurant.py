@@ -10,6 +10,8 @@ class Restaurant(Model):
     address = fields.TextField(null=True)
     phone = fields.CharField(max_length=20, null=True)
     email = fields.CharField(max_length=255, null=True)
+    stripe_account_id = fields.CharField(max_length=255, null=True)
+    stripe_onboarding_complete = fields.BooleanField(default=False)
 
 Restaurant_Pydantic = pydantic_model_creator(Restaurant, name="Restaurant")
 RestaurantIn_Pydantic = pydantic_model_creator(Restaurant, name="RestaurantIn", exclude_readonly=True)

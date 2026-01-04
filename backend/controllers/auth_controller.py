@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 from models.user import User, UserIn_Pydantic, User_Pydantic, Role
 from models.restaurant import Restaurant
 from services.auth import get_current_user
+from services.stripe_service import create_express_account, create_account_link
 import asyncpg
+import os
 
 load_dotenv()
 
@@ -154,9 +156,11 @@ async def signup(signup_data: SignUpRequest):
                 raise
         
         # If restaurant admin, create restaurant
+        restaurant = None
+        stripe_onboarding_url = None
         if signup_data.role == Role.RESTAURANT_ADMIN.value:
             try:
-                await Restaurant.create(
+                restaurant = await Restaurant.create(
                     name=signup_data.restaurant_name,
                     owner=user,
                     is_approved=False,
@@ -167,12 +171,34 @@ async def signup(signup_data: SignUpRequest):
             except Exception as rest_err:
                 # If restaurant columns don't exist, create without them
                 if "address" in str(rest_err) or "phone" in str(rest_err) or "email" in str(rest_err) or "is_approved" in str(rest_err):
-                    await Restaurant.create(
+                    restaurant = await Restaurant.create(
                         name=signup_data.restaurant_name,
                         owner=user
                     )
                 else:
                     raise
+            
+            # Optionally create Stripe Express account and onboarding link
+            if restaurant:
+                try:
+                    stripe_account = await create_express_account(email=restaurant.email)
+                    restaurant.stripe_account_id = stripe_account.id
+                    await restaurant.save()
+                    
+                    # Generate onboarding link
+                    base_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+                    return_url = f"{base_url}/restaurant-admin?section=payments&onboard=success"
+                    refresh_url = f"{base_url}/restaurant-admin?section=payments&onboard=refresh"
+                    account_link = await create_account_link(
+                        account_id=stripe_account.id,
+                        refresh_url=refresh_url,
+                        return_url=return_url,
+                        type="account_onboarding"
+                    )
+                    stripe_onboarding_url = account_link.url
+                except Exception as stripe_err:
+                    # If Stripe fails, continue without it (restaurant can set up later)
+                    print(f"Stripe account creation failed during signup: {stripe_err}")
         
         # Return user data (without password)
         user_dict = {
@@ -180,6 +206,10 @@ async def signup(signup_data: SignUpRequest):
             "username": user.username,
             "role": user.role.value if hasattr(user.role, 'value') else str(user.role)
         }
+        if restaurant:
+            user_dict["restaurant_id"] = restaurant.id
+        if stripe_onboarding_url:
+            user_dict["stripe_onboarding_url"] = stripe_onboarding_url
         return user_dict
     except HTTPException:
         raise

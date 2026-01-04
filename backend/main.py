@@ -10,6 +10,9 @@ from controllers.menu_controller import router as menu_router
 from controllers.qr_controller import router as qr_router
 from controllers.order_controller import router as order_router
 from controllers.file_controller import router as file_router
+from controllers.stripe_controller import router as stripe_router
+from controllers.platform_settings_controller import router as platform_settings_router
+from controllers.ingredient_controller import router as ingredient_router
 from helpers.lifespan import lifespan
 
 @asynccontextmanager
@@ -38,6 +41,9 @@ app.include_router(menu_router, prefix="/menus")
 app.include_router(qr_router, prefix="/restaurants")
 app.include_router(order_router, prefix="")
 app.include_router(file_router, prefix="/files")
+app.include_router(stripe_router, prefix="")
+app.include_router(platform_settings_router, prefix="")
+app.include_router(ingredient_router, prefix="/restaurants")
 
 # Mount static files for uploads
 if os.path.exists("uploads"):
