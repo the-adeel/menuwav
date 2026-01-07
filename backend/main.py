@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+from helpers.static_files import StaticFilesWithCORS
 
 from controllers.auth_controller import router as auth_router
 from controllers.restaurant_controller import router as restaurant_router
@@ -13,6 +14,7 @@ from controllers.file_controller import router as file_router
 from controllers.stripe_controller import router as stripe_router
 from controllers.platform_settings_controller import router as platform_settings_router
 from controllers.ingredient_controller import router as ingredient_router
+from controllers.generated_menu_controller import router as generated_menu_router
 from helpers.lifespan import lifespan
 
 @asynccontextmanager
@@ -44,7 +46,8 @@ app.include_router(file_router, prefix="/files")
 app.include_router(stripe_router, prefix="")
 app.include_router(platform_settings_router, prefix="")
 app.include_router(ingredient_router, prefix="/restaurants")
+app.include_router(generated_menu_router, prefix="")
 
-# Mount static files for uploads
+# Mount static files for uploads with CORS support
 if os.path.exists("uploads"):
-    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+    app.mount("/uploads", StaticFilesWithCORS(directory="uploads"), name="uploads")

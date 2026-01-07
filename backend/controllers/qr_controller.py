@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from typing import List
 from pydantic import BaseModel
 
@@ -92,4 +92,35 @@ async def delete_qr_code(restaurant_id: int, qr_id: int, user: User = Depends(ge
 
     await qr_code.delete()
     return {"message": "QR code deleted successfully"}
+
+class BulkDeleteQRRequest(BaseModel):
+    qr_ids: List[int]
+
+@router.post("/{restaurant_id}/qr/bulk-delete")
+async def bulk_delete_qr_codes(restaurant_id: int, request: BulkDeleteQRRequest, user: User = Depends(get_current_user)):
+    """Bulk delete QR codes (admin only)"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can delete QR codes")
+
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+
+    if not request.qr_ids:
+        raise HTTPException(status_code=400, detail="No QR code IDs provided")
+
+    # Get QR codes that belong to this restaurant
+    qr_codes = await QRCode.filter(id__in=request.qr_ids, restaurant=restaurant).all()
+    
+    if not qr_codes:
+        raise HTTPException(status_code=404, detail="No QR codes found")
+
+    deleted_count = len(qr_codes)
+    for qr_code in qr_codes:
+        await qr_code.delete()
+
+    return {
+        "message": f"{deleted_count} QR code(s) deleted successfully",
+        "deleted_count": deleted_count
+    }
 

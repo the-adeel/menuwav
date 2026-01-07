@@ -39,6 +39,69 @@ async def get_optional_user(authorization: Optional[str] = Header(default=None))
 
 router = APIRouter()
 
+def generate_order_number(restaurant_id: int, last_order_number: Optional[str] = None) -> str:
+    """
+    Generate next order number following pattern:
+    A1-A9, B1-B9, ..., Z1-Z9, then A11-A19, B11-B19, ..., Z11-Z19, etc.
+    (skipping numbers ending in 0)
+    """
+    import string
+    
+    if not last_order_number:
+        # First order for this restaurant
+        return "A1"
+    
+    # Extract letter and number from last order number
+    letter = last_order_number[0]
+    number_str = last_order_number[1:]
+    
+    try:
+        number = int(number_str)
+    except ValueError:
+        # If parsing fails, start from A1
+        return "A1"
+    
+    # Get letter index (A=0, B=1, ..., Z=25)
+    letter_index = ord(letter.upper()) - ord('A')
+    
+    # Determine next number
+    # Pattern: 1-9, then 11-19, 21-29, 31-39, etc. (skip numbers ending in 0)
+    if number < 9:
+        # Within 1-9 range, just increment
+        next_number = number + 1
+        return f"{letter}{next_number}"
+    elif number == 9:
+        # Move to next letter, start at 11 (skip 10)
+        next_letter_index = (letter_index + 1) % 26
+        next_letter = chr(ord('A') + next_letter_index)
+        return f"{next_letter}11"
+    else:
+        # In 11-19, 21-29, etc. range
+        # Check if we're at the end of a decade (19, 29, 39, etc.)
+        if number % 10 == 9:
+            # Move to next letter, start next decade
+            next_letter_index = (letter_index + 1) % 26
+            next_letter = chr(ord('A') + next_letter_index)
+            # Start at next decade + 1 (e.g., after 19 comes 21, after 29 comes 31)
+            next_decade = ((number // 10) + 1) * 10
+            return f"{next_letter}{next_decade + 1}"
+        else:
+            # Just increment within current decade
+            next_number = number + 1
+            return f"{letter}{next_number}"
+
+async def get_next_order_number(restaurant_id: int) -> str:
+    """Get the next order number for a restaurant"""
+    # Get the last order for this restaurant
+    last_order = await Order.filter(restaurant_id=restaurant_id).order_by("-id").first()
+    
+    if not last_order or not last_order.order_number:
+        # No previous orders or no order number set, start from A1
+        return "A1"
+    
+    # Generate next number based on last order number
+    return generate_order_number(restaurant_id, last_order.order_number)
+
 class OrderItemRequest(BaseModel):
     menu_item_id: int
     quantity: int
@@ -122,6 +185,9 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
     except ValueError:
         order_type = OrderType.PICKUP
     
+    # Generate order number
+    order_number = await get_next_order_number(restaurant.id)
+    
     # Create order
     order = await Order.create(
         restaurant=restaurant,
@@ -130,7 +196,8 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         status=OrderStatus.PENDING,
         total=total,
         order_type=order_type,
-        payment_status=PaymentStatus.PENDING
+        payment_status=PaymentStatus.PENDING,
+        order_number=order_number
     )
     
     # Create order items and add-ons
@@ -351,4 +418,70 @@ async def get_order_payment_status(
         "payment_status": order.payment_status.value if hasattr(order.payment_status, 'value') else str(order.payment_status),
         "payment_method": order.payment_method.value if order.payment_method and hasattr(order.payment_method, 'value') else (str(order.payment_method) if order.payment_method else None)
     }
+
+@router.get("/restaurants/{restaurant_id}/orders/large-display")
+async def get_orders_large_display(
+    restaurant_id: int,
+    user: User = Depends(get_current_user)
+):
+    """Get orders for large display screen (admin only)"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can access large orders display")
+    
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    # Get orders with status: pending, confirmed, preparing, ready
+    orders = await Order.filter(
+        restaurant=restaurant,
+        status__in=[OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY]
+    ).prefetch_related("customer", "items").order_by("-created_at")
+    
+    # Sort by status priority: pending > confirmed > preparing > ready
+    status_priority = {
+        OrderStatus.PENDING: 1,
+        OrderStatus.CONFIRMED: 2,
+        OrderStatus.PREPARING: 3,
+        OrderStatus.READY: 4
+    }
+    
+    result = []
+    for order in orders:
+        order_dict = await Order_Pydantic.from_tortoise_orm(order)
+        customer = await order.customer if order.customer_id else None
+        items = await order.items.all().prefetch_related("menu_item", "addons")
+        items_data = []
+        for oi in items:
+            item_dict = await OrderItem_Pydantic.from_tortoise_orm(oi)
+            menu_item = await oi.menu_item
+            addons = await oi.addons.all().prefetch_related("addon")
+            addons_data = []
+            for oa in addons:
+                addon = await oa.addon
+                addons_data.append({
+                    "id": addon.id,
+                    "name": addon.name,
+                    "price_adjustment": str(oa.price_at_time)
+                })
+            items_data.append({
+                **item_dict.dict(),
+                "menu_item": {
+                    "id": menu_item.id,
+                    "name": menu_item.name,
+                    "description": menu_item.description
+                },
+                "addons": addons_data
+            })
+        result.append({
+            **order_dict.dict(),
+            "customer_username": customer.username if customer else None,
+            "items": items_data,
+            "status_priority": status_priority.get(order.status, 99)
+        })
+    
+    # Sort by status priority, then by creation time
+    result.sort(key=lambda x: (x["status_priority"], x["created_at"]))
+    
+    return result
 

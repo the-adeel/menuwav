@@ -20,7 +20,8 @@ EXPECTED_HEADERS = [
     "Category",
     "Item Description",
     "Price",
-    "Image"
+    "Image",
+    "ID"
 ]
 
 # Alternative header names (case-insensitive, handles common typos/variations)
@@ -30,7 +31,8 @@ HEADER_VARIANTS = {
     "Category": ["category", "cat", "categories", "item category", "itemcategory"],
     "Item Description": ["item description", "itemdescription", "description", "item_description", "desc", "details", "item description "],  # Note: trailing space variant
     "Price": ["price", "item price", "itemprice", "item_price", "cost", "amount"],
-    "Image": ["image", "item image", "itemimage", "item_image", "picture", "photo", "img"]
+    "Image": ["image", "item image", "itemimage", "item_image", "picture", "photo", "img"],
+    "ID": ["id", "item id", "itemid", "item_id", "external id", "externalid", "external_id", "identifier"]
 }
 
 
@@ -331,12 +333,14 @@ async def import_menu_from_excel(file_path: str, restaurant: Restaurant) -> Impo
                 # Column D: Item Description
                 # Column E: Price
                 # Column F: Image
+                # Column G: ID (optional, for duplicate prevention)
                 menu_name = get_cell_value(worksheet, row_num, 1)  # Column A
                 item_name = get_cell_value(worksheet, row_num, 2)  # Column B
                 # Column C (Category) is skipped - not used in MenuItem model
                 item_description = get_cell_value(worksheet, row_num, 4)  # Column D
                 item_price_str = get_cell_value(worksheet, row_num, 5)  # Column E
                 item_image_cell = worksheet.cell(row=row_num, column=6)  # Column F
+                external_id = get_cell_value(worksheet, row_num, 7)  # Column G
                 
                 # Validate required fields
                 if not menu_name:
@@ -361,8 +365,20 @@ async def import_menu_from_excel(file_path: str, restaurant: Restaurant) -> Impo
                     restaurant=restaurant
                 )
                 
-                # Note: Duplicate items are allowed - we import everything regardless
-                # This allows importing the same item multiple times if needed
+                # Check for duplicate if external_id is provided
+                if external_id:
+                    existing_item = await MenuItem.get_or_none(
+                        menu=menu,
+                        external_id=external_id
+                    )
+                    if existing_item:
+                        result.skipped_items += 1
+                        result.errors.append(MenuImportError(
+                            row_num,
+                            item_name,
+                            f"Duplicate item with ID '{external_id}' already exists in menu '{menu_name}'"
+                        ))
+                        continue
                 
                 # Parse price
                 item_price, price_error = parse_price(item_price_str)
@@ -387,7 +403,8 @@ async def import_menu_from_excel(file_path: str, restaurant: Restaurant) -> Impo
                     name=item_name,
                     description=item_description,
                     price=item_price,
-                    image_url=item_image_url
+                    image_url=item_image_url,
+                    external_id=external_id
                 )
                 result.imported_items += 1
             

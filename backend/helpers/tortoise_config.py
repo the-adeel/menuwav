@@ -20,6 +20,7 @@ TORTOISE_ORM = {
                 "models.order_item_addon",
                 "models.qr_code",
                 "models.platform_settings",
+                "models.generated_menu",
                 "aerich.models"
             ],
             "default_connection": "default",

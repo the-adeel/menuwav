@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, Response
 import os
 import uuid
 import shutil
@@ -137,4 +137,47 @@ async def upload_addon_image(
         return {"image_url": relative_path}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+@router.get("/proxy-image")
+async def proxy_image(request: Request, image_path: str):
+    """Proxy endpoint for images with CORS headers"""
+    # Security: Only allow paths within uploads directory
+    if not image_path.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid image path")
+    
+    # Remove leading slash and construct full path
+    file_path = Path(image_path.lstrip("/"))
+    
+    # Ensure file exists
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Read file and return with CORS headers
+    try:
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        
+        # Determine content type
+        content_type = "image/jpeg"
+        if file_path.suffix.lower() == '.png':
+            content_type = "image/png"
+        elif file_path.suffix.lower() == '.webp':
+            content_type = "image/webp"
+        
+        # Get origin from request
+        origin = request.headers.get("origin", "*")
+        
+        # Return response with CORS headers
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
 

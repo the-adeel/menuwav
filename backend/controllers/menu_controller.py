@@ -22,6 +22,7 @@ class ItemCreateRequest(BaseModel):
     image_url: Optional[str] = None
     ingredient_ids: Optional[List[int]] = []
     addons: Optional[List[dict]] = []
+    external_id: Optional[str] = None
 
 class ItemUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -29,6 +30,7 @@ class ItemUpdateRequest(BaseModel):
     price: Optional[float] = None
     image_url: Optional[str] = None
     ingredient_ids: Optional[List[int]] = None
+    external_id: Optional[str] = None
 
 router = APIRouter()
 
@@ -188,13 +190,23 @@ async def add_item(restaurant_id: int, menu_id: int, item_request: ItemCreateReq
     if not menu:
         raise HTTPException(404, "Menu not found")
     
+    # Check for duplicate external_id if provided
+    if item_request.external_id:
+        existing_item = await MenuItem.get_or_none(
+            menu=menu,
+            external_id=item_request.external_id
+        )
+        if existing_item:
+            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists in this menu")
+    
     # Create the menu item
     item = await MenuItem.create(
         menu=menu,
         name=item_request.name,
         description=item_request.description,
         price=item_request.price,
-        image_url=item_request.image_url
+        image_url=item_request.image_url,
+        external_id=item_request.external_id
     )
     
     # Add ingredients if provided
@@ -236,6 +248,15 @@ async def update_item(restaurant_id: int, menu_id: int, item_id: int, item_reque
     if not menu_item:
         raise HTTPException(404, "Menu item not found")
     
+    # Check for duplicate external_id if provided and different from current
+    if item_request.external_id is not None and item_request.external_id != menu_item.external_id:
+        existing_item = await MenuItem.get_or_none(
+            menu=menu,
+            external_id=item_request.external_id
+        )
+        if existing_item and existing_item.id != menu_item.id:
+            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists in this menu")
+    
     # Update basic fields
     if item_request.name is not None:
         menu_item.name = item_request.name
@@ -245,6 +266,8 @@ async def update_item(restaurant_id: int, menu_id: int, item_id: int, item_reque
         menu_item.price = item_request.price
     if item_request.image_url is not None:
         menu_item.image_url = item_request.image_url
+    if item_request.external_id is not None:
+        menu_item.external_id = item_request.external_id
     await menu_item.save()
     
     # Update ingredients if provided
