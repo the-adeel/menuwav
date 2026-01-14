@@ -15,6 +15,7 @@ from controllers.stripe_controller import router as stripe_router
 from controllers.platform_settings_controller import router as platform_settings_router
 from controllers.ingredient_controller import router as ingredient_router
 from controllers.generated_menu_controller import router as generated_menu_router
+from controllers.meal_item_controller import router as meal_item_router
 from helpers.lifespan import lifespan
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ app.include_router(stripe_router, prefix="")
 app.include_router(platform_settings_router, prefix="")
 app.include_router(ingredient_router, prefix="/restaurants")
 app.include_router(generated_menu_router, prefix="")
+app.include_router(meal_item_router, prefix="/restaurants")
 
 # Mount static files for uploads with CORS support
 if os.path.exists("uploads"):

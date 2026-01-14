@@ -10,6 +10,8 @@ from models.menu_item import MenuItem, MenuItemIn_Pydantic, MenuItem_Pydantic
 from models.menu_item_addon import MenuItemAddon, MenuItemAddonIn_Pydantic, MenuItemAddon_Pydantic
 from models.ingredient import Ingredient, Ingredient_Pydantic
 from models.menu_item_ingredient import MenuItemIngredient
+from models.meal_item import MealItem, MealItem_Pydantic
+from models.menu_item_meal_item import MenuItemMealItem
 from models.restaurant import Restaurant
 from models.user import User, Role
 from services.auth import get_current_user
@@ -23,6 +25,7 @@ class ItemCreateRequest(BaseModel):
     ingredient_ids: Optional[List[int]] = []
     addons: Optional[List[dict]] = []
     external_id: Optional[str] = None
+    meal_item_ids: Optional[List[int]] = []
 
 class ItemUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -30,6 +33,7 @@ class ItemUpdateRequest(BaseModel):
     price: Optional[float] = None
     image_url: Optional[str] = None
     ingredient_ids: Optional[List[int]] = None
+    meal_item_ids: Optional[List[int]] = None
     external_id: Optional[str] = None
 
 router = APIRouter()
@@ -55,10 +59,18 @@ async def get_public_menu(restaurant_id: int):
             # Get ingredients for this item
             menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
             ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
+            # Get meal items for this item
+            menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
+            meal_items = []
+            for mim in menu_item_meal_items:
+                meal_item = await mim.meal_item
+                if meal_item.is_available:
+                    meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
             items_data.append({
                 **item_dict.dict(),
                 "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
-                "ingredients": [ing.dict() for ing in ingredients]
+                "ingredients": [ing.dict() for ing in ingredients],
+                "meal_items": [meal.dict() for meal in meal_items]
             })
         result.append({
             "menu": await Menu_Pydantic.from_tortoise_orm(menu),
@@ -83,10 +95,18 @@ async def get_menu(restaurant_id: int):
             # Get ingredients for this item
             menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
             ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
+            # Get meal items for this item
+            menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
+            meal_items = []
+            for mim in menu_item_meal_items:
+                meal_item = await mim.meal_item
+                if meal_item.is_available:
+                    meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
             items_data.append({
                 **item_dict.dict(),
                 "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
-                "ingredients": [ing.dict() for ing in ingredients]
+                "ingredients": [ing.dict() for ing in ingredients],
+                "meal_items": [meal.dict() for meal in meal_items]
             })
         result.append({
             "menu": await Menu_Pydantic.from_tortoise_orm(menu),
@@ -232,6 +252,17 @@ async def add_item(restaurant_id: int, menu_id: int, item_request: ItemCreateReq
                 is_available=addon_data.get('is_available', True)
             )
     
+    # Add meal items if provided
+    if item_request.meal_item_ids:
+        # Verify all meal items belong to this restaurant
+        meal_items = await MealItem.filter(id__in=item_request.meal_item_ids, restaurant=restaurant).all()
+        if len(meal_items) != len(item_request.meal_item_ids):
+            raise HTTPException(400, "One or more meal items not found or not authorized")
+        
+        # Create meal item relationships
+        for meal_item in meal_items:
+            await MenuItemMealItem.create(menu_item=item, meal_item=meal_item)
+    
     return await MenuItem_Pydantic.from_tortoise_orm(item)
 
 @router.put("/{restaurant_id}/menus/{menu_id}/items/{item_id}", response_model=MenuItem_Pydantic)
@@ -285,6 +316,22 @@ async def update_item(restaurant_id: int, menu_id: int, item_id: int, item_reque
             # Create ingredient relationships
             for ingredient in ingredients:
                 await MenuItemIngredient.create(menu_item=menu_item, ingredient=ingredient)
+    
+    # Update meal items if provided
+    if item_request.meal_item_ids is not None:
+        # Delete existing meal item relationships
+        await MenuItemMealItem.filter(menu_item=menu_item).delete()
+        
+        # Add new meal item relationships
+        if item_request.meal_item_ids:
+            # Verify all meal items belong to this restaurant
+            meal_items = await MealItem.filter(id__in=item_request.meal_item_ids, restaurant=restaurant).all()
+            if len(meal_items) != len(item_request.meal_item_ids):
+                raise HTTPException(400, "One or more meal items not found or not authorized")
+            
+            # Create meal item relationships
+            for meal_item in meal_items:
+                await MenuItemMealItem.create(menu_item=menu_item, meal_item=meal_item)
     
     return await MenuItem_Pydantic.from_tortoise_orm(menu_item)
 

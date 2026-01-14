@@ -15,6 +15,7 @@ from services.stripe_service import (
     get_account,
     handle_webhook,
 )
+from helpers.url_helpers import get_frontend_url
 
 load_dotenv()
 
@@ -40,7 +41,7 @@ async def initiate_onboarding(
         raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
     
     # Get base URL from environment or use default
-    base_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    base_url = get_frontend_url()
     refresh_url = f"{base_url}/restaurant-admin?section=payments&onboard=refresh"
     return_url = f"{base_url}/restaurant-admin?section=payments&onboard=success"
     

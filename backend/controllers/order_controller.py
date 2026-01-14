@@ -9,9 +9,11 @@ from dotenv import load_dotenv
 from models.order import Order, Order_Pydantic, OrderStatus, OrderType, PaymentStatus, PaymentMethod
 from models.order_item import OrderItem, OrderItem_Pydantic
 from models.order_item_addon import OrderItemAddon, OrderItemAddon_Pydantic
+from models.order_meal_item import OrderMealItem, OrderMealItem_Pydantic
 from models.restaurant import Restaurant
 from models.menu_item import MenuItem
 from models.menu_item_addon import MenuItemAddon
+from models.meal_item import MealItem
 from models.user import User, Role
 from services.auth import get_current_user
 
@@ -102,16 +104,28 @@ async def get_next_order_number(restaurant_id: int) -> str:
     # Generate next number based on last order number
     return generate_order_number(restaurant_id, last_order.order_number)
 
+class AddonRequest(BaseModel):
+    id: int
+    quantity: int = 1
+
+class MealItemRequest(BaseModel):
+    id: int
+    quantity: int = 1
+
 class OrderItemRequest(BaseModel):
     menu_item_id: int
     quantity: int
-    selected_addon_ids: List[int] = []
+    selected_addon_ids: List[int] = []  # Legacy support - will be converted to selected_addons
+    selected_addons: List[AddonRequest] = []  # New format with quantities
+    selected_meal_items: List[MealItemRequest] = []  # Meal items for make a meal
 
 class CreateOrderRequest(BaseModel):
     restaurant_id: int
     table_number: Optional[int] = None
-    order_type: Optional[str] = "pickup"  # "pickup" or "delivery"
+    order_type: Optional[str] = "pickup"  # "pickup", "delivery", or "collection"
     items: List[OrderItemRequest]
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
 
 class UpdateOrderStatusRequest(BaseModel):
     status: str
@@ -151,32 +165,91 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         # Validate and get selected add-ons
         addon_total = Decimal('0.00')
         selected_addons = []
-        if item_req.selected_addon_ids:
+        
+        # Support both old format (selected_addon_ids) and new format (selected_addons with quantities)
+        addon_map = {}
+        if item_req.selected_addons:
+            # New format with quantities
+            for addon_req in item_req.selected_addons:
+                if addon_req.quantity < 1:
+                    raise HTTPException(status_code=400, detail="Add-on quantity must be at least 1")
+                if addon_req.quantity > 10:
+                    raise HTTPException(status_code=400, detail="Add-on quantity cannot exceed 10")
+                addon_map[addon_req.id] = addon_req.quantity
+        elif item_req.selected_addon_ids:
+            # Legacy format - default quantity 1 for each
+            for addon_id in item_req.selected_addon_ids:
+                addon_map[addon_id] = 1
+        
+        if addon_map:
+            addon_ids = list(addon_map.keys())
             addons = await MenuItemAddon.filter(
-                id__in=item_req.selected_addon_ids,
+                id__in=addon_ids,
                 menu_item=menu_item,
                 is_available=True
             ).all()
             
-            if len(addons) != len(item_req.selected_addon_ids):
+            if len(addons) != len(addon_ids):
                 raise HTTPException(status_code=400, detail="One or more selected add-ons are invalid or unavailable")
             
             for addon in addons:
-                addon_total += Decimal(str(addon.price_adjustment))
+                quantity = addon_map[addon.id]
+                addon_total += Decimal(str(addon.price_adjustment)) * quantity
                 selected_addons.append({
                     'addon': addon,
-                    'price_at_time': addon.price_adjustment
+                    'price_at_time': addon.price_adjustment,
+                    'quantity': quantity
                 })
         
-        # Calculate item total: (item_price + addon_total) * quantity
+        # Validate and get selected meal items
+        meal_total = Decimal('0.00')
+        selected_meal_items = []
+        meal_charge = Decimal('0.00')
+        
+        if item_req.selected_meal_items:
+            meal_item_ids = [mi.id for mi in item_req.selected_meal_items]
+            meal_items = await MealItem.filter(
+                id__in=meal_item_ids,
+                restaurant=restaurant,
+                is_available=True
+            ).all()
+            
+            if len(meal_items) != len(meal_item_ids):
+                raise HTTPException(status_code=400, detail="One or more selected meal items are invalid or unavailable")
+            
+            # Calculate meal items total
+            meal_item_map = {mi.id: mi for mi in meal_items}
+            for meal_item_req in item_req.selected_meal_items:
+                if meal_item_req.quantity < 1:
+                    raise HTTPException(status_code=400, detail="Meal item quantity must be at least 1")
+                if meal_item_req.quantity > 10:
+                    raise HTTPException(status_code=400, detail="Meal item quantity cannot exceed 10")
+                
+                meal_item = meal_item_map[meal_item_req.id]
+                meal_total += Decimal(str(meal_item.price)) * meal_item_req.quantity
+                selected_meal_items.append({
+                    'meal_item': meal_item,
+                    'price_at_time': meal_item.price,
+                    'quantity': meal_item_req.quantity
+                })
+            
+            # Add meal charge if meal items are selected
+            if selected_meal_items and restaurant.meal_charge:
+                meal_charge = Decimal(str(restaurant.meal_charge))
+        
+        # Calculate item total: (item_price + addon_total) * quantity + (meal_total + meal_charge) * quantity
         item_total = (Decimal(str(menu_item.price)) + addon_total) * item_req.quantity
+        if selected_meal_items:
+            item_total += (meal_total + meal_charge) * item_req.quantity
         total += item_total
         
         order_items_data.append({
             'menu_item': menu_item,
             'quantity': item_req.quantity,
             'price_at_time': menu_item.price,
-            'selected_addons': selected_addons
+            'selected_addons': selected_addons,
+            'selected_meal_items': selected_meal_items,
+            'meal_charge': meal_charge
         })
     
     # Validate order_type
@@ -184,6 +257,13 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         order_type = OrderType(order_data.order_type) if order_data.order_type else OrderType.PICKUP
     except ValueError:
         order_type = OrderType.PICKUP
+    
+    # Validate customer info for pickup and collection orders
+    if order_type in [OrderType.PICKUP, OrderType.COLLECTION]:
+        if not order_data.customer_name or not order_data.customer_name.strip():
+            raise HTTPException(status_code=400, detail="Customer name is required for pickup and collection orders")
+        if not order_data.customer_phone or not order_data.customer_phone.strip():
+            raise HTTPException(status_code=400, detail="Customer phone is required for pickup and collection orders")
     
     # Generate order number
     order_number = await get_next_order_number(restaurant.id)
@@ -197,28 +277,43 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         total=total,
         order_type=order_type,
         payment_status=PaymentStatus.PENDING,
-        order_number=order_number
+        order_number=order_number,
+        customer_name=order_data.customer_name,
+        customer_phone=order_data.customer_phone
     )
     
-    # Create order items and add-ons
+    # Create order items, add-ons, and meal items
     for item_data in order_items_data:
         order_item = await OrderItem.create(
             order=order,
             menu_item=item_data['menu_item'],
             quantity=item_data['quantity'],
-            price_at_time=item_data['price_at_time']
+            price_at_time=item_data['price_at_time'],
+            meal_charge=item_data.get('meal_charge', Decimal('0.00'))
         )
         
         # Create order item add-ons
         for addon_data in item_data['selected_addons']:
+            quantity = addon_data.get('quantity', 1)
             await OrderItemAddon.create(
                 order_item=order_item,
                 addon=addon_data['addon'],
-                price_at_time=addon_data['price_at_time']
+                price_at_time=addon_data['price_at_time'],
+                quantity=quantity
+            )
+        
+        # Create order meal items
+        for meal_item_data in item_data.get('selected_meal_items', []):
+            quantity = meal_item_data.get('quantity', 1)
+            await OrderMealItem.create(
+                order_item=order_item,
+                meal_item=meal_item_data['meal_item'],
+                price_at_time=meal_item_data['price_at_time'],
+                quantity=quantity
             )
     
     # Fetch order with items for response
-    order_items = await OrderItem.filter(order=order).prefetch_related("menu_item", "addons")
+    order_items = await OrderItem.filter(order=order).prefetch_related("menu_item", "addons", "meal_items")
     order_dict = await Order_Pydantic.from_tortoise_orm(order)
     items_data = []
     for oi in order_items:
@@ -231,7 +326,18 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
             addons_data.append({
                 "id": addon.id,
                 "name": addon.name,
-                "price_adjustment": str(oa.price_at_time)
+                "price_adjustment": str(oa.price_at_time),
+                "quantity": oa.quantity
+            })
+        meal_items = await oi.meal_items.all().prefetch_related("meal_item")
+        meal_items_data = []
+        for om in meal_items:
+            meal_item = await om.meal_item
+            meal_items_data.append({
+                "id": meal_item.id,
+                "name": meal_item.name,
+                "price": str(om.price_at_time),
+                "quantity": om.quantity
             })
         items_data.append({
             **item_dict.dict(),
@@ -240,7 +346,9 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
                 "name": menu_item_dict.name,
                 "description": menu_item_dict.description
             },
-            "addons": addons_data
+            "addons": addons_data,
+            "meal_items": meal_items_data,
+            "meal_charge": str(oi.meal_charge) if hasattr(oi, 'meal_charge') else "0.00"
         })
     
     return {
@@ -270,7 +378,8 @@ async def get_my_orders(user: User = Depends(get_current_user)):
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
-                    "price_adjustment": str(oa.price_at_time)
+                    "price_adjustment": str(oa.price_at_time),
+                    "quantity": oa.quantity
                 })
             items_data.append({
                 **item_dict.dict(),
@@ -329,7 +438,8 @@ async def get_restaurant_orders(
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
-                    "price_adjustment": str(oa.price_at_time)
+                    "price_adjustment": str(oa.price_at_time),
+                    "quantity": oa.quantity
                 })
             items_data.append({
                 **item_dict.dict(),
@@ -462,7 +572,8 @@ async def get_orders_large_display(
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
-                    "price_adjustment": str(oa.price_at_time)
+                    "price_adjustment": str(oa.price_at_time),
+                    "quantity": oa.quantity
                 })
             items_data.append({
                 **item_dict.dict(),

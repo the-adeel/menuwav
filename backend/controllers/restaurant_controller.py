@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from typing import List
+from pydantic import BaseModel
 
 from models.restaurant import Restaurant, RestaurantIn_Pydantic, Restaurant_Pydantic
 from models.menu import Menu, Menu_Pydantic
@@ -9,6 +10,9 @@ from models.user import User, Role
 from services.auth import get_current_user
 
 router = APIRouter()
+
+class MealChargeUpdateRequest(BaseModel):
+    meal_charge: float
 
 @router.get("/")
 async def list_restaurants():
@@ -175,4 +179,24 @@ async def create_restaurant(restaurant_in: RestaurantIn_Pydantic, user: User = D
         raise HTTPException(status_code=403, detail="Only superadmin can create restaurants")
     
     restaurant = await Restaurant.create(**restaurant_in.dict(), owner=user)
+    return await Restaurant_Pydantic.from_tortoise_orm(restaurant)
+
+@router.patch("/{restaurant_id}/meal-charge", response_model=Restaurant_Pydantic)
+async def update_meal_charge(
+    restaurant_id: int,
+    request: MealChargeUpdateRequest = Body(...),
+    user: User = Depends(get_current_user)
+):
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can update meal charge")
+    
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    if request.meal_charge < 0:
+        raise HTTPException(status_code=400, detail="Meal charge cannot be negative")
+    
+    restaurant.meal_charge = request.meal_charge
+    await restaurant.save()
     return await Restaurant_Pydantic.from_tortoise_orm(restaurant)

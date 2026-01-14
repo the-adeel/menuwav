@@ -14,6 +14,7 @@ class OrderStatus(str, Enum):
 class OrderType(str, Enum):
     PICKUP = "pickup"
     DELIVERY = "delivery"
+    COLLECTION = "collection"
 
 class PaymentMethod(str, Enum):
     ONLINE = "online"
@@ -38,6 +39,8 @@ class Order(Model):
     payment_status = fields.CharEnumField(PaymentStatus, default=PaymentStatus.PENDING)
     stripe_payment_intent_id = fields.CharField(max_length=255, null=True)
     order_number = fields.CharField(max_length=50, null=True, unique=True)  # Alphanumeric order number like A1, B5, etc.
+    customer_name = fields.CharField(max_length=255, null=True)
+    customer_phone = fields.CharField(max_length=20, null=True)
 
 Order_Pydantic = pydantic_model_creator(Order, name="Order")
 OrderIn_Pydantic = pydantic_model_creator(Order, name="OrderIn", exclude_readonly=True)
