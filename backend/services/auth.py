@@ -1,5 +1,6 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer
+from typing import Optional
 import jwt  # This is from PyJWT
 from jwt.exceptions import InvalidTokenError as JWTError  # Alias for compatibility
 import os
@@ -80,3 +81,29 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         user.role = Role(role_str) if isinstance(role_str, str) else Role(user.role)
     
     return user
+
+async def get_optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:
+    """Optional authentication - returns user if token is valid, None otherwise.
+    Used for endpoints that should work for both authenticated and guest users."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    
+    token = authorization.replace("Bearer ", "")
+    if not token:
+        return None
+    
+    try:
+        if not SECRET_KEY:
+            return None
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            return None
+        user = await User.get_or_none(username=username)
+        # Only return user if they exist and are a customer (for order/payment context)
+        if user and user.role == Role.CUSTOMER:
+            return user
+    except Exception:
+        # Invalid token or other error - return None for guest access
+        pass
+    return None

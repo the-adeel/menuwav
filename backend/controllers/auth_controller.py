@@ -12,7 +12,6 @@ from models.user import User, UserIn_Pydantic, User_Pydantic, Role
 from models.restaurant import Restaurant
 from services.auth import get_current_user
 from services.stripe_service import create_express_account, create_account_link
-from helpers.url_helpers import get_frontend_url
 import asyncpg
 import os
 
@@ -187,7 +186,7 @@ async def signup(signup_data: SignUpRequest):
                     await restaurant.save()
                     
                     # Generate onboarding link
-                    base_url = get_frontend_url()
+                    base_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
                     return_url = f"{base_url}/restaurant-admin?section=payments&onboard=success"
                     refresh_url = f"{base_url}/restaurant-admin?section=payments&onboard=refresh"
                     account_link = await create_account_link(

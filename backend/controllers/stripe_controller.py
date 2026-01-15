@@ -7,15 +7,17 @@ from dotenv import load_dotenv
 from models.restaurant import Restaurant
 from models.order import Order
 from models.user import User, Role
-from services.auth import get_current_user
+from services.auth import get_current_user, get_optional_user
 from services.stripe_service import (
     create_express_account,
     create_account_link,
     create_payment_intent,
     get_account,
     handle_webhook,
+    delete_account,
+    is_test_mode,
+    create_login_link,
 )
-from helpers.url_helpers import get_frontend_url
 
 load_dotenv()
 
@@ -26,6 +28,10 @@ class OnboardResponse(BaseModel):
 
 class PaymentIntentResponse(BaseModel):
     client_secret: str
+
+class LoginLinkResponse(BaseModel):
+    login_url: str
+    expires_at: Optional[int] = None
 
 @router.post("/restaurants/{restaurant_id}/stripe/onboard", response_model=OnboardResponse)
 async def initiate_onboarding(
@@ -41,25 +47,38 @@ async def initiate_onboarding(
         raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
     
     # Get base URL from environment or use default
-    base_url = get_frontend_url()
+    base_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
     refresh_url = f"{base_url}/restaurant-admin?section=payments&onboard=refresh"
     return_url = f"{base_url}/restaurant-admin?section=payments&onboard=success"
     
-    # Create Express account if doesn't exist
-    if not restaurant.stripe_account_id:
-        account = await create_express_account(email=restaurant.email)
-        restaurant.stripe_account_id = account.id
-        await restaurant.save()
-    
-    # Create account link
-    account_link = await create_account_link(
-        account_id=restaurant.stripe_account_id,
-        refresh_url=refresh_url,
-        return_url=return_url,
-        type="account_onboarding" if not restaurant.stripe_onboarding_complete else "account_update"
-    )
-    
-    return OnboardResponse(account_link_url=account_link.url)
+    try:
+        # Create Express account if doesn't exist
+        if not restaurant.stripe_account_id:
+            print(f"Creating Stripe Express account for restaurant {restaurant_id}")
+            account = await create_express_account(email=restaurant.email)
+            restaurant.stripe_account_id = account.id
+            await restaurant.save()
+            print(f"Created Stripe account: {account.id}")
+        
+        # Create account link
+        print(f"Creating account link for Stripe account: {restaurant.stripe_account_id}")
+        account_link = await create_account_link(
+            account_id=restaurant.stripe_account_id,
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding" if not restaurant.stripe_onboarding_complete else "account_update"
+        )
+        print(f"Created account link: {account_link.url}")
+        
+        return OnboardResponse(account_link_url=account_link.url)
+    except ValueError as e:
+        print(f"ValueError in initiate_onboarding: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"Exception in initiate_onboarding: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to create Stripe account link: {str(e)}")
 
 @router.get("/restaurants/{restaurant_id}/stripe/status")
 async def get_stripe_status(
@@ -74,18 +93,119 @@ async def get_stripe_status(
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
     
+    # If account exists, check Stripe directly to get real-time status
+    # This ensures immediate updates even if webhooks haven't fired yet
+    if restaurant.stripe_account_id:
+        try:
+            account = await get_account(restaurant.stripe_account_id)
+            # Check if account is fully onboarded based on Stripe's actual status
+            details_submitted = account.get("details_submitted", False)
+            charges_enabled = account.get("charges_enabled", False)
+            is_complete = details_submitted and charges_enabled
+            
+            # Update database if status changed
+            if restaurant.stripe_onboarding_complete != is_complete:
+                restaurant.stripe_onboarding_complete = is_complete
+                await restaurant.save()
+                print(f"Updated Stripe onboarding status for restaurant {restaurant_id}: {is_complete}")
+        except Exception as e:
+            print(f"Error checking Stripe account status: {e}")
+            # Continue with database value if Stripe check fails
+    
     return {
         "stripe_account_id": restaurant.stripe_account_id,
         "stripe_onboarding_complete": restaurant.stripe_onboarding_complete,
         "has_stripe_account": restaurant.stripe_account_id is not None
     }
 
+@router.get("/restaurants/{restaurant_id}/stripe/login-link", response_model=LoginLinkResponse)
+async def get_restaurant_login_link(
+    restaurant_id: int,
+    user: User = Depends(get_current_user)
+):
+    """Get a login link for restaurant to access their Stripe Express dashboard"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can access")
+    
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    if not restaurant.stripe_account_id:
+        raise HTTPException(status_code=400, detail="No Stripe account connected")
+    
+    if not restaurant.stripe_onboarding_complete:
+        raise HTTPException(
+            status_code=400, 
+            detail="Stripe account onboarding not complete. Please complete onboarding first."
+        )
+    
+    try:
+        login_link = await create_login_link(restaurant.stripe_account_id)
+        
+        # Stripe login link object - access attributes using dot notation
+        # Stripe Python SDK returns objects with attribute access
+        try:
+            login_url = login_link.url
+            expires_at = getattr(login_link, 'expires_at', None)
+        except AttributeError:
+            # Fallback: try dict access if it's a dict-like object
+            login_url = login_link.get('url') if hasattr(login_link, 'get') else None
+            expires_at = login_link.get('expires_at') if hasattr(login_link, 'get') else None
+        
+        if not login_url:
+            raise HTTPException(status_code=500, detail="Failed to get login URL from Stripe response")
+        
+        return LoginLinkResponse(
+            login_url=login_url,
+            expires_at=expires_at
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"Error creating login link: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to create login link: {str(e)}")
+
+@router.delete("/restaurants/{restaurant_id}/stripe/disconnect")
+async def disconnect_stripe(
+    restaurant_id: int,
+    user: User = Depends(get_current_user)
+):
+    """Disconnect Stripe account from restaurant"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can disconnect Stripe")
+    
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    if not restaurant.stripe_account_id:
+        raise HTTPException(status_code=400, detail="No Stripe account connected")
+    
+    # Delete the Stripe account if in test mode (safe to do)
+    # In live mode, we just clear our records but leave the Stripe account
+    if is_test_mode():
+        try:
+            await delete_account(restaurant.stripe_account_id)
+        except Exception as e:
+            # Log error but continue - we'll still clear our records
+            print(f"Warning: Could not delete Stripe account: {e}")
+    
+    # Clear the connection from our database
+    restaurant.stripe_account_id = None
+    restaurant.stripe_onboarding_complete = False
+    await restaurant.save()
+    
+    return {"status": "success", "message": "Stripe account disconnected successfully"}
+
 @router.post("/orders/{order_id}/create-payment-intent", response_model=PaymentIntentResponse)
 async def create_order_payment_intent(
     order_id: int,
-    user: Optional[User] = Depends(get_current_user)
+    user: Optional[User] = Depends(get_optional_user)
 ):
-    """Create a payment intent for an order"""
+    """Create a payment intent for an order. Works for both authenticated and guest users."""
     order = await Order.get_or_none(id=order_id).prefetch_related("restaurant")
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")

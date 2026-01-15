@@ -1,10 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel
 from decimal import Decimal
-import jwt
-import os
-from dotenv import load_dotenv
 
 from models.order import Order, Order_Pydantic, OrderStatus, OrderType, PaymentStatus, PaymentMethod
 from models.order_item import OrderItem, OrderItem_Pydantic
@@ -15,29 +12,7 @@ from models.menu_item import MenuItem
 from models.menu_item_addon import MenuItemAddon
 from models.meal_item import MealItem
 from models.user import User, Role
-from services.auth import get_current_user
-
-load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = "HS256"
-
-async def get_optional_user(authorization: Optional[str] = Header(default=None)) -> Optional[User]:
-    """Optional authentication - returns user if token is valid, None otherwise"""
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    
-    token = authorization.replace("Bearer ", "")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            return None
-        user = await User.get_or_none(username=username)
-        if user and user.role == Role.CUSTOMER:
-            return user
-    except:
-        pass
-    return None
+from services.auth import get_current_user, get_optional_user
 
 router = APIRouter()
 

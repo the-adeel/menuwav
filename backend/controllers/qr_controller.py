@@ -6,7 +6,6 @@ from models.restaurant import Restaurant
 from models.qr_code import QRCode, QRCode_Pydantic, QRType
 from models.user import User, Role
 from services.auth import get_current_user
-from helpers.url_helpers import get_frontend_url
 
 router = APIRouter()
 
@@ -26,7 +25,7 @@ async def generate_table_qr(restaurant_id: int, request: GenerateTableQRRequest,
         raise HTTPException(status_code=400, detail="Number of tables must be at least 1")
     
     qr_codes = []
-    base_url = get_frontend_url()
+    base_url = "http://localhost:5173"  # Frontend URL - adjust as needed
     
     for table_num in range(1, request.number_of_tables + 1):
         qr_url = f"{base_url}/menu/{restaurant_id}?table={table_num}"
@@ -54,7 +53,7 @@ async def generate_restaurant_qr(restaurant_id: int, user: User = Depends(get_cu
     if existing_qr:
         return await QRCode_Pydantic.from_tortoise_orm(existing_qr)
     
-    base_url = get_frontend_url()
+    base_url = "http://localhost:5173"  # Frontend URL - adjust as needed
     qr_url = f"{base_url}/menu/{restaurant_id}"
     
     qr_code = await QRCode.create(
