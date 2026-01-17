@@ -138,6 +138,110 @@ async def upload_addon_image(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
+@router.post("/upload/restaurant-cover")
+async def upload_restaurant_cover(
+    file: UploadFile = File(...),
+    restaurant_id: int = Form(...),
+    user: User = Depends(get_current_user)
+):
+    """Upload cover photo for restaurant"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
+    
+    # Verify restaurant ownership
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    # Validate file
+    is_valid, error_msg = validate_image_file(file)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    # Check file size
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File size exceeds {MAX_FILE_SIZE / 1024 / 1024}MB limit")
+    
+    # Create restaurant-specific directory
+    restaurant_dir = UPLOAD_BASE_DIR / f"restaurant_{restaurant_id}"
+    restaurant_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    file_ext = Path(file.filename).suffix.lower()
+    timestamp = int(time.time())
+    unique_id = str(uuid.uuid4())[:8]
+    filename = f"cover_{timestamp}_{unique_id}{file_ext}"
+    file_path = restaurant_dir / filename
+    
+    # Save file
+    try:
+        await save_uploaded_file(file, file_path)
+        
+        # Update restaurant model with new cover photo URL
+        relative_path = f"/uploads/images/restaurant_{restaurant_id}/{filename}"
+        restaurant.cover_photo_url = relative_path
+        await restaurant.save()
+        
+        return {"image_url": relative_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+@router.post("/upload/restaurant-logo")
+async def upload_restaurant_logo(
+    file: UploadFile = File(...),
+    restaurant_id: int = Form(...),
+    user: User = Depends(get_current_user)
+):
+    """Upload logo for restaurant"""
+    if user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
+    
+    # Verify restaurant ownership
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+    
+    # Validate file
+    is_valid, error_msg = validate_image_file(file)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    # Check file size
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File size exceeds {MAX_FILE_SIZE / 1024 / 1024}MB limit")
+    
+    # Create restaurant-specific directory
+    restaurant_dir = UPLOAD_BASE_DIR / f"restaurant_{restaurant_id}"
+    restaurant_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    file_ext = Path(file.filename).suffix.lower()
+    timestamp = int(time.time())
+    unique_id = str(uuid.uuid4())[:8]
+    filename = f"logo_{timestamp}_{unique_id}{file_ext}"
+    file_path = restaurant_dir / filename
+    
+    # Save file
+    try:
+        await save_uploaded_file(file, file_path)
+        
+        # Update restaurant model with new logo URL
+        relative_path = f"/uploads/images/restaurant_{restaurant_id}/{filename}"
+        restaurant.logo_url = relative_path
+        await restaurant.save()
+        
+        return {"image_url": relative_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
 @router.get("/proxy-image")
 async def proxy_image(request: Request, image_path: str):
     """Proxy endpoint for images with CORS headers"""

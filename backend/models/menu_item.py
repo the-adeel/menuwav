@@ -9,6 +9,7 @@ class MenuItem(Model):
     price = fields.DecimalField(max_digits=10, decimal_places=2)
     image_url = fields.CharField(max_length=500, null=True)
     menu = fields.ForeignKeyField("models.Menu", related_name="items")
+    categories = fields.ManyToManyField("models.Category", related_name="items", through="menu_item_category")
     external_id = fields.CharField(max_length=255, null=True)  # Custom ID for duplicate prevention
 
 MenuItem_Pydantic = pydantic_model_creator(MenuItem, name="MenuItem")

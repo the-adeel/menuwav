@@ -148,7 +148,9 @@ async def get_restaurant(restaurant_id: int):
         restaurant_dict = {
             "id": restaurant.id,
             "name": restaurant.name,
-            "is_approved": getattr(restaurant, 'is_approved', False)
+            "is_approved": getattr(restaurant, 'is_approved', False),
+            "cover_photo_url": getattr(restaurant, 'cover_photo_url', None),
+            "logo_url": getattr(restaurant, 'logo_url', None)
         }
     
     # Get menus with items and add-ons

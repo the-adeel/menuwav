@@ -6,6 +6,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 from models.menu import Menu, MenuIn_Pydantic, Menu_Pydantic
+from models.category import Category, CategoryIn_Pydantic, Category_Pydantic
 from models.menu_item import MenuItem, MenuItemIn_Pydantic, MenuItem_Pydantic
 from models.menu_item_addon import MenuItemAddon, MenuItemAddonIn_Pydantic, MenuItemAddon_Pydantic
 from models.ingredient import Ingredient, Ingredient_Pydantic
@@ -22,6 +23,8 @@ class ItemCreateRequest(BaseModel):
     description: Optional[str] = None
     price: float
     image_url: Optional[str] = None
+    category_ids: List[int] = []  # List of category IDs
+    menu_id: Optional[int] = None  # Menu ID for import/organization (keep for backward compatibility)
     ingredient_ids: Optional[List[int]] = []
     addons: Optional[List[dict]] = []
     external_id: Optional[str] = None
@@ -32,6 +35,8 @@ class ItemUpdateRequest(BaseModel):
     description: Optional[str] = None
     price: Optional[float] = None
     image_url: Optional[str] = None
+    category_ids: Optional[List[int]] = None  # List of category IDs
+    menu_id: Optional[int] = None  # Menu ID for import/organization
     ingredient_ids: Optional[List[int]] = None
     meal_item_ids: Optional[List[int]] = None
     external_id: Optional[str] = None
@@ -48,10 +53,16 @@ async def get_public_menu(restaurant_id: int):
     if not restaurant.is_approved:
         raise HTTPException(403, "Restaurant is not approved")
     
-    menus = await Menu.filter(restaurant=restaurant).prefetch_related("items")
+    # Get all categories for this restaurant
+    categories = await Category.filter(restaurant=restaurant).all()
+    
+    # Get all items for this restaurant (through menu relationship)
+    all_items = await MenuItem.filter(menu__restaurant=restaurant).prefetch_related("addons", "categories").distinct()
+    
     result = []
-    for menu in menus:
-        items = await menu.items.all().prefetch_related("addons")
+    for category in categories:
+        # Get items for this specific category
+        items = await MenuItem.filter(categories__id=category.id, menu__restaurant=restaurant).prefetch_related("addons").distinct()
         items_data = []
         for item in items:
             item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
@@ -73,10 +84,35 @@ async def get_public_menu(restaurant_id: int):
                 "meal_items": [meal.dict() for meal in meal_items]
             })
         result.append({
-            "menu": await Menu_Pydantic.from_tortoise_orm(menu),
+            "category": await Category_Pydantic.from_tortoise_orm(category),
             "items": items_data
         })
-    return result
+    
+    # Add "all items" section for the "All" tab
+    all_items_data = []
+    for item in all_items:
+        item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
+        addons = await item.addons.filter(is_available=True).all()
+        menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
+        ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
+        menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
+        meal_items = []
+        for mim in menu_item_meal_items:
+            meal_item = await mim.meal_item
+            if meal_item.is_available:
+                meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
+        all_items_data.append({
+            **item_dict.dict(),
+            "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
+            "ingredients": [ing.dict() for ing in ingredients],
+            "meal_items": [meal.dict() for meal in meal_items]
+        })
+    
+    # Return categories with their items, plus all_items list
+    return {
+        "categories": result,
+        "all_items": all_items_data
+    }
 
 @router.get("/{restaurant_id}")
 async def get_menu(restaurant_id: int):
@@ -84,10 +120,10 @@ async def get_menu(restaurant_id: int):
     if not restaurant:
         raise HTTPException(404, "Restaurant not found")
     
-    menus = await Menu.filter(restaurant=restaurant).prefetch_related("items")
+    menus = await Menu.filter(restaurant=restaurant).all()
     result = []
     for menu in menus:
-        items = await menu.items.all().prefetch_related("addons")
+        items = await MenuItem.filter(menu_id=menu.id).prefetch_related("addons").distinct()
         items_data = []
         for item in items:
             item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
@@ -123,6 +159,37 @@ async def create_menu(restaurant_id: int, menu_in: MenuIn_Pydantic, user: User =
     menu = await Menu.create(restaurant=restaurant, **menu_in.dict())
     return await Menu_Pydantic.from_tortoise_orm(menu)
 
+@router.put("/{restaurant_id}/menus/{menu_id}", response_model=Menu_Pydantic)
+async def update_menu(restaurant_id: int, menu_id: int, menu_in: MenuIn_Pydantic, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
+    if not menu:
+        raise HTTPException(404, "Category not found")
+    
+    menu.name = menu_in.name
+    await menu.save()
+    return await Menu_Pydantic.from_tortoise_orm(menu)
+
+@router.get("/{restaurant_id}/menus")
+async def list_menus(restaurant_id: int, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    menus = await Menu.filter(restaurant=restaurant).all()
+    result = []
+    for menu in menus:
+        item_count = await MenuItem.filter(menu_id=menu.id).count()
+        menu_dict = await Menu_Pydantic.from_tortoise_orm(menu)
+        result.append({
+            **menu_dict.dict(),
+            "item_count": item_count
+        })
+    return result
+
 @router.delete("/{restaurant_id}/menus/{menu_id}")
 async def delete_menu(restaurant_id: int, menu_id: int, user: User = Depends(get_current_user)):
     restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
@@ -133,17 +200,72 @@ async def delete_menu(restaurant_id: int, menu_id: int, user: User = Depends(get
     if not menu:
         raise HTTPException(404, "Menu not found")
     
-    # Delete all addons for all items in this menu
-    menu_items = await MenuItem.filter(menu=menu).all()
-    for item in menu_items:
-        await MenuItemAddon.filter(menu_item=item).delete()
-    
-    # Delete all items in this menu
+    # Delete all items in this menu (Menu is for import/organization)
     await MenuItem.filter(menu=menu).delete()
     
     # Delete the menu itself
     await menu.delete()
     return {"message": "Menu deleted successfully"}
+
+# Category Management Endpoints
+@router.post("/{restaurant_id}/categories", response_model=Category_Pydantic)
+async def create_category(restaurant_id: int, category_in: CategoryIn_Pydantic, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    category = await Category.create(restaurant=restaurant, **category_in.dict())
+    return await Category_Pydantic.from_tortoise_orm(category)
+
+@router.get("/{restaurant_id}/categories")
+async def list_categories(restaurant_id: int, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    categories = await Category.filter(restaurant=restaurant).all()
+    result = []
+    for category in categories:
+        item_count = await MenuItem.filter(categories__id=category.id).count()
+        category_dict = await Category_Pydantic.from_tortoise_orm(category)
+        result.append({
+            **category_dict.dict(),
+            "item_count": item_count
+        })
+    return result
+
+@router.put("/{restaurant_id}/categories/{category_id}", response_model=Category_Pydantic)
+async def update_category(restaurant_id: int, category_id: int, category_in: CategoryIn_Pydantic, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    category = await Category.get_or_none(id=category_id, restaurant=restaurant)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    
+    category.name = category_in.name
+    await category.save()
+    return await Category_Pydantic.from_tortoise_orm(category)
+
+@router.delete("/{restaurant_id}/categories/{category_id}")
+async def delete_category(restaurant_id: int, category_id: int, user: User = Depends(get_current_user)):
+    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    category = await Category.get_or_none(id=category_id, restaurant=restaurant)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    
+    # Remove category association from all items (items may belong to other categories too)
+    menu_items = await MenuItem.filter(categories__id=category_id).prefetch_related("categories").all()
+    for item in menu_items:
+        await item.categories.remove(category)
+    
+    # Delete the category itself
+    await category.delete()
+    return {"message": "Category deleted successfully"}
 
 @router.post("/{restaurant_id}/import")
 async def import_menu_items(
@@ -200,34 +322,48 @@ async def import_menu_items(
             except Exception:
                 pass
 
-@router.post("/{restaurant_id}/menus/{menu_id}/items", response_model=MenuItem_Pydantic)
-async def add_item(restaurant_id: int, menu_id: int, item_request: ItemCreateRequest, user: User = Depends(get_current_user)):
+@router.post("/{restaurant_id}/items", response_model=MenuItem_Pydantic)
+async def add_item(restaurant_id: int, item_request: ItemCreateRequest, user: User = Depends(get_current_user)):
     restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant or user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
+    # Validate menu_id if provided (required for organization/import)
+    menu = None
+    if item_request.menu_id:
+        menu = await Menu.get_or_none(id=item_request.menu_id, restaurant=restaurant)
+        if not menu:
+            raise HTTPException(400, "Menu not found or not authorized")
+    
+    # Validate category_ids belong to this restaurant
+    categories = []
+    if item_request.category_ids:
+        categories = await Category.filter(id__in=item_request.category_ids, restaurant=restaurant).all()
+        if len(categories) != len(item_request.category_ids):
+            raise HTTPException(400, "One or more categories not found or not authorized")
     
     # Check for duplicate external_id if provided
     if item_request.external_id:
-        existing_item = await MenuItem.get_or_none(
-            menu=menu,
+        existing_item = await MenuItem.filter(
+            menu__restaurant=restaurant,
             external_id=item_request.external_id
-        )
+        ).first()
         if existing_item:
-            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists in this menu")
+            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists")
     
     # Create the menu item
     item = await MenuItem.create(
-        menu=menu,
         name=item_request.name,
         description=item_request.description,
         price=item_request.price,
         image_url=item_request.image_url,
-        external_id=item_request.external_id
+        external_id=item_request.external_id,
+        menu=menu
     )
+    
+    # Associate item with categories
+    if categories:
+        await item.categories.add(*categories)
     
     # Add ingredients if provided
     if item_request.ingredient_ids:
@@ -265,28 +401,25 @@ async def add_item(restaurant_id: int, menu_id: int, item_request: ItemCreateReq
     
     return await MenuItem_Pydantic.from_tortoise_orm(item)
 
-@router.put("/{restaurant_id}/menus/{menu_id}/items/{item_id}", response_model=MenuItem_Pydantic)
-async def update_item(restaurant_id: int, menu_id: int, item_id: int, item_request: ItemUpdateRequest, user: User = Depends(get_current_user)):
+@router.put("/{restaurant_id}/items/{item_id}", response_model=MenuItem_Pydantic)
+async def update_item(restaurant_id: int, item_id: int, item_request: ItemUpdateRequest, user: User = Depends(get_current_user)):
     restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant or user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
+    # Get item and verify it belongs to this restaurant (through menu relationship)
+    menu_item = await MenuItem.filter(id=item_id, menu__restaurant=restaurant).prefetch_related("categories").first()
     if not menu_item:
         raise HTTPException(404, "Menu item not found")
     
     # Check for duplicate external_id if provided and different from current
     if item_request.external_id is not None and item_request.external_id != menu_item.external_id:
-        existing_item = await MenuItem.get_or_none(
-            menu=menu,
+        existing_item = await MenuItem.filter(
+            menu__restaurant=restaurant,
             external_id=item_request.external_id
-        )
+        ).first()
         if existing_item and existing_item.id != menu_item.id:
-            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists in this menu")
+            raise HTTPException(400, f"Menu item with ID '{item_request.external_id}' already exists")
     
     # Update basic fields
     if item_request.name is not None:
@@ -299,7 +432,26 @@ async def update_item(restaurant_id: int, menu_id: int, item_id: int, item_reque
         menu_item.image_url = item_request.image_url
     if item_request.external_id is not None:
         menu_item.external_id = item_request.external_id
+    if item_request.menu_id is not None:
+        menu = await Menu.get_or_none(id=item_request.menu_id, restaurant=restaurant)
+        if menu:
+            menu_item.menu = menu
     await menu_item.save()
+    
+    # Update category associations if provided
+    if item_request.category_ids is not None:
+        # Validate category_ids belong to this restaurant
+        if item_request.category_ids:
+            categories = await Category.filter(id__in=item_request.category_ids, restaurant=restaurant).all()
+            if len(categories) != len(item_request.category_ids):
+                raise HTTPException(400, "One or more categories not found or not authorized")
+        else:
+            categories = []
+        
+        # Clear existing category associations and add new ones
+        await menu_item.categories.clear()
+        if categories:
+            await menu_item.categories.add(*categories)
     
     # Update ingredients if provided
     if item_request.ingredient_ids is not None:
@@ -417,17 +569,13 @@ async def delete_addon(restaurant_id: int, menu_id: int, item_id: int, addon_id:
     await addon.delete()
     return {"message": "Add-on deleted successfully"}
 
-@router.delete("/{restaurant_id}/menus/{menu_id}/items/{item_id}")
-async def delete_item(restaurant_id: int, menu_id: int, item_id: int, user: User = Depends(get_current_user)):
+@router.delete("/{restaurant_id}/items/{item_id}")
+async def delete_item(restaurant_id: int, item_id: int, user: User = Depends(get_current_user)):
     restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant or user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
+    menu_item = await MenuItem.filter(id=item_id, menu__restaurant=restaurant).first()
     if not menu_item:
         raise HTTPException(404, "Menu item not found")
     

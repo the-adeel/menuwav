@@ -13,6 +13,8 @@ class Restaurant(Model):
     stripe_account_id = fields.CharField(max_length=255, null=True)
     stripe_onboarding_complete = fields.BooleanField(default=False)
     meal_charge = fields.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    cover_photo_url = fields.CharField(max_length=500, null=True)
+    logo_url = fields.CharField(max_length=500, null=True)
 
 Restaurant_Pydantic = pydantic_model_creator(Restaurant, name="Restaurant")
 RestaurantIn_Pydantic = pydantic_model_creator(Restaurant, name="RestaurantIn", exclude_readonly=True)

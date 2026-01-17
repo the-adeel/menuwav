@@ -11,6 +11,7 @@ TORTOISE_ORM = {
                 "models.user",
                 "models.restaurant",
                 "models.menu",
+                "models.category",
                 "models.menu_item",
                 "models.menu_item_addon",
                 "models.ingredient",
