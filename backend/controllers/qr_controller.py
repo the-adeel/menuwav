@@ -14,12 +14,14 @@ class GenerateTableQRRequest(BaseModel):
 
 @router.post("/{restaurant_id}/qr/generate-table")
 async def generate_table_qr(restaurant_id: int, request: GenerateTableQRRequest, user: User = Depends(get_current_user)):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can generate QR codes")
-    
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can generate QR codes")
     
     if request.number_of_tables < 1:
         raise HTTPException(status_code=400, detail="Number of tables must be at least 1")
@@ -41,12 +43,14 @@ async def generate_table_qr(restaurant_id: int, request: GenerateTableQRRequest,
 
 @router.post("/{restaurant_id}/qr/generate-restaurant")
 async def generate_restaurant_qr(restaurant_id: int, user: User = Depends(get_current_user)):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can generate QR codes")
-    
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can generate QR codes")
     
     # Check if restaurant QR already exists
     existing_qr = await QRCode.get_or_none(restaurant=restaurant, qr_type=QRType.RESTAURANT)
@@ -67,24 +71,28 @@ async def generate_restaurant_qr(restaurant_id: int, user: User = Depends(get_cu
 
 @router.get("/{restaurant_id}/qr/list", response_model=List[QRCode_Pydantic])
 async def list_qr_codes(restaurant_id: int, user: User = Depends(get_current_user)):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can view QR codes")
-
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can view QR codes")
 
     qr_codes = await QRCode.filter(restaurant=restaurant).order_by("-created_at")
     return [await QRCode_Pydantic.from_tortoise_orm(qr) for qr in qr_codes]
 
 @router.delete("/{restaurant_id}/qr/{qr_id}")
 async def delete_qr_code(restaurant_id: int, qr_id: int, user: User = Depends(get_current_user)):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can delete QR codes")
-
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can delete QR codes")
 
     qr_code = await QRCode.get_or_none(id=qr_id, restaurant=restaurant)
     if not qr_code:
@@ -99,12 +107,14 @@ class BulkDeleteQRRequest(BaseModel):
 @router.post("/{restaurant_id}/qr/bulk-delete")
 async def bulk_delete_qr_codes(restaurant_id: int, request: BulkDeleteQRRequest, user: User = Depends(get_current_user)):
     """Bulk delete QR codes (admin only)"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can delete QR codes")
-
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can delete QR codes")
 
     if not request.qr_ids:
         raise HTTPException(status_code=400, detail="No QR code IDs provided")

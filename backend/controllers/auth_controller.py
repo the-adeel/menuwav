@@ -10,10 +10,17 @@ from dotenv import load_dotenv
 
 from models.user import User, UserIn_Pydantic, User_Pydantic, Role
 from models.restaurant import Restaurant
+from models.membership_plan import MembershipPlan
+from models.restaurant_subscription import RestaurantSubscription, SubscriptionStatus
 from services.auth import get_current_user
-from services.stripe_service import create_express_account, create_account_link
+from services.stripe_service import (
+    create_express_account,
+    create_account_link,
+    create_or_get_stripe_customer,
+    create_subscription_directly,
+    create_checkout_session_for_subscription
+)
 import asyncpg
-import os
 
 load_dotenv()
 
@@ -36,6 +43,7 @@ class SignUpRequest(BaseModel):
     # Restaurant-specific fields
     restaurant_name: Optional[str] = None
     address: Optional[str] = None
+    plan_id: Optional[int] = None  # Required for restaurant_admin, optional for customer
 
 def create_access_token(data: dict):
     if not SECRET_KEY:
@@ -131,6 +139,15 @@ async def signup(signup_data: SignUpRequest):
         if signup_data.role == Role.RESTAURANT_ADMIN.value:
             if not signup_data.restaurant_name:
                 raise HTTPException(status_code=400, detail="restaurant_name is required for restaurant signup")
+            if not signup_data.plan_id:
+                raise HTTPException(status_code=400, detail="plan_id is required for restaurant signup")
+        
+        # Validate and get membership plan if provided
+        membership_plan = None
+        if signup_data.plan_id:
+            membership_plan = await MembershipPlan.get_or_none(id=signup_data.plan_id, is_active=True)
+            if not membership_plan:
+                raise HTTPException(status_code=400, detail="Invalid or inactive membership plan")
         
         # Hash password
         hashed = bcrypt.hashpw(signup_data.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -158,6 +175,7 @@ async def signup(signup_data: SignUpRequest):
         # If restaurant admin, create restaurant
         restaurant = None
         stripe_onboarding_url = None
+        checkout_url = None
         if signup_data.role == Role.RESTAURANT_ADMIN.value:
             try:
                 restaurant = await Restaurant.create(
@@ -199,6 +217,56 @@ async def signup(signup_data: SignUpRequest):
                 except Exception as stripe_err:
                     # If Stripe fails, continue without it (restaurant can set up later)
                     print(f"Stripe account creation failed during signup: {stripe_err}")
+            
+            # Create Stripe subscription for restaurant (required for all plans, including free)
+            subscription = None
+            if membership_plan and restaurant:
+                try:
+                    # Create or get Stripe Customer
+                    customer_email = restaurant.email or signup_data.email
+                    stripe_customer = await create_or_get_stripe_customer(
+                        email=customer_email,
+                        metadata={"restaurant_id": str(restaurant.id), "user_id": str(user.id)}
+                    )
+                    restaurant.stripe_customer_id = stripe_customer.id
+                    await restaurant.save()
+                    
+                    # Create subscription (for both $0 and paid plans)
+                    if membership_plan.price == 0:
+                        # For $0 plans, create subscription directly
+                        stripe_subscription = await create_subscription_directly(
+                            customer_id=stripe_customer.id,
+                            price_id=membership_plan.stripe_price_id,
+                            metadata={"restaurant_id": str(restaurant.id), "plan_id": str(membership_plan.id)}
+                        )
+                        
+                        # Create subscription record in database
+                        subscription = await RestaurantSubscription.create(
+                            restaurant=restaurant,
+                            plan=membership_plan,
+                            stripe_subscription_id=stripe_subscription.id,
+                            status=SubscriptionStatus.ACTIVE,
+                            current_period_start=datetime.fromtimestamp(stripe_subscription.current_period_start, tz=timezone.utc),
+                            current_period_end=datetime.fromtimestamp(stripe_subscription.current_period_end, tz=timezone.utc),
+                            cancel_at_period_end=False
+                        )
+                    else:
+                        # For paid plans, create checkout session and return URL
+                        base_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+                        success_url = f"{base_url}/signup/success?session_id={{CHECKOUT_SESSION_ID}}"
+                        cancel_url = f"{base_url}/signup"
+                        
+                        checkout_session = await create_checkout_session_for_subscription(
+                            customer_id=stripe_customer.id,
+                            price_id=membership_plan.stripe_price_id,
+                            success_url=success_url,
+                            cancel_url=cancel_url,
+                            metadata={"restaurant_id": str(restaurant.id), "plan_id": str(membership_plan.id), "user_id": str(user.id)}
+                        )
+                        checkout_url = checkout_session.url
+                except Exception as sub_err:
+                    print(f"Stripe subscription creation failed during signup: {sub_err}")
+                    # Continue without subscription - user can retry or admin can fix
         
         # Return user data (without password)
         user_dict = {
@@ -210,6 +278,11 @@ async def signup(signup_data: SignUpRequest):
             user_dict["restaurant_id"] = restaurant.id
         if stripe_onboarding_url:
             user_dict["stripe_onboarding_url"] = stripe_onboarding_url
+        if checkout_url:
+            user_dict["checkout_url"] = checkout_url
+            user_dict["requires_payment"] = True
+        elif membership_plan and membership_plan.price == 0:
+            user_dict["subscription_created"] = True
         return user_dict
     except HTTPException:
         raise

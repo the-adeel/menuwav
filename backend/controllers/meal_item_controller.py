@@ -25,8 +25,13 @@ class MealItemUpdateRequest(BaseModel):
 
 @router.get("/{restaurant_id}/meal-items", response_model=List[MealItem_Pydantic])
 async def list_meal_items(restaurant_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     meal_items = await MealItem.filter(restaurant=restaurant).order_by("name")
@@ -38,8 +43,13 @@ async def create_meal_item(
     request: MealItemCreateRequest = Body(...),
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     # Check if meal item already exists for this restaurant
@@ -64,8 +74,13 @@ async def update_meal_item(
     request: MealItemUpdateRequest = Body(...),
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     meal_item = await MealItem.get_or_none(id=meal_item_id, restaurant=restaurant)
@@ -97,8 +112,13 @@ async def delete_meal_item(
     meal_item_id: int,
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     meal_item = await MealItem.get_or_none(id=meal_item_id, restaurant=restaurant)

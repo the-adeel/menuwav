@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from typing import List, Optional
 from pydantic import BaseModel
 
 from models.restaurant import Restaurant, RestaurantIn_Pydantic, Restaurant_Pydantic
 from models.menu import Menu, Menu_Pydantic
 from models.menu_item import MenuItem, MenuItem_Pydantic
-from models.menu_item_addon import MenuItemAddon, MenuItemAddon_Pydantic
+from models.menu_item_addon import MenuItemAddon
+from models.addon import Addon, Addon_Pydantic
 from models.user import User, Role
 from services.auth import get_current_user
 
@@ -123,7 +124,15 @@ async def delete_restaurant(restaurant_id: int, user: User = Depends(get_current
     return {"message": "Restaurant and owner deleted successfully"}
 
 @router.get("/my-restaurant")
-async def get_my_restaurant(user: User = Depends(get_current_user)):
+async def get_my_restaurant(restaurant_id: Optional[int] = Query(None), user: User = Depends(get_current_user)):
+    # If superadmin provides restaurant_id, allow access to that restaurant
+    if user.role == Role.SUPERADMIN and restaurant_id is not None:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+        if not restaurant:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+        return await Restaurant_Pydantic.from_tortoise_orm(restaurant)
+    
+    # Otherwise, check if user is restaurant admin and get their restaurant
     if user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(status_code=403, detail="Only restaurant admins can access this endpoint")
     
@@ -157,14 +166,19 @@ async def get_restaurant(restaurant_id: int):
     menus = await Menu.filter(restaurant=restaurant).prefetch_related("items")
     menus_data = []
     for menu in menus:
-        items = await menu.items.all().prefetch_related("addons")
+        items = await menu.items.all()
         items_data = []
         for item in items:
             item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
-            addons = await item.addons.all()
+            # Get addons for this item via junction table
+            menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+            addons = []
+            for mia in menu_item_addons:
+                addon = await mia.addon
+                addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
             items_data.append({
                 **item_dict.dict(),
-                "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons]
+                "addons": [addon.dict() for addon in addons]
             })
         menu_dict = await Menu_Pydantic.from_tortoise_orm(menu)
         menus_data.append({
@@ -189,12 +203,14 @@ async def update_meal_charge(
     request: MealChargeUpdateRequest = Body(...),
     user: User = Depends(get_current_user)
 ):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can update meal charge")
-    
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can update meal charge")
     
     if request.meal_charge < 0:
         raise HTTPException(status_code=400, detail="Meal charge cannot be negative")

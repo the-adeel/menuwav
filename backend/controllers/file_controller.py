@@ -45,13 +45,14 @@ async def upload_menu_item_image(
     user: User = Depends(get_current_user)
 ):
     """Upload image for menu item"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
     
     # Validate file
     is_valid, error_msg = validate_image_file(file)
@@ -95,13 +96,14 @@ async def upload_addon_image(
     user: User = Depends(get_current_user)
 ):
     """Upload image for add-on"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
     
     # Validate file
     is_valid, error_msg = validate_image_file(file)
@@ -145,13 +147,14 @@ async def upload_restaurant_cover(
     user: User = Depends(get_current_user)
 ):
     """Upload cover photo for restaurant"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
     
     # Validate file
     is_valid, error_msg = validate_image_file(file)
@@ -197,13 +200,14 @@ async def upload_restaurant_logo(
     user: User = Depends(get_current_user)
 ):
     """Upload logo for restaurant"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can upload images")
     
     # Validate file
     is_valid, error_msg = validate_image_file(file)

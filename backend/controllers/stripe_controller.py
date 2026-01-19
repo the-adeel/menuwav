@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -7,6 +8,8 @@ from dotenv import load_dotenv
 from models.restaurant import Restaurant
 from models.order import Order
 from models.user import User, Role
+from models.restaurant_subscription import RestaurantSubscription, SubscriptionStatus
+from models.membership_plan import MembershipPlan
 from services.auth import get_current_user, get_optional_user
 from services.stripe_service import (
     create_express_account,
@@ -294,6 +297,114 @@ async def stripe_webhook(request: Request):
                 charges_enabled = account.get("charges_enabled", False)
                 restaurant.stripe_onboarding_complete = details_submitted and charges_enabled
                 await restaurant.save()
+    
+    # Subscription webhook handlers
+    elif event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        if session.get("mode") == "subscription":
+            # Get metadata
+            metadata = session.get("metadata", {})
+            restaurant_id = metadata.get("restaurant_id")
+            plan_id = metadata.get("plan_id")
+            customer_id = session.get("customer")
+            
+            if restaurant_id and plan_id:
+                restaurant = await Restaurant.get_or_none(id=int(restaurant_id))
+                plan = await MembershipPlan.get_or_none(id=int(plan_id))
+                
+                if restaurant and plan and customer_id:
+                    # Update or create subscription
+                    subscription_id = session.get("subscription")
+                    if subscription_id:
+                        # Get subscription details from Stripe
+                        import stripe
+                        stripe_subscription = stripe.Subscription.retrieve(subscription_id)
+                        
+                        subscription = await RestaurantSubscription.get_or_none(restaurant=restaurant)
+                        if subscription:
+                            # Update existing
+                            subscription.stripe_subscription_id = stripe_subscription.id
+                            subscription.plan = plan
+                            subscription.status = SubscriptionStatus.ACTIVE
+                            subscription.current_period_start = datetime.fromtimestamp(stripe_subscription.current_period_start, tz=timezone.utc)
+                            subscription.current_period_end = datetime.fromtimestamp(stripe_subscription.current_period_end, tz=timezone.utc)
+                            await subscription.save()
+                        else:
+                            # Create new
+                            subscription = await RestaurantSubscription.create(
+                                restaurant=restaurant,
+                                plan=plan,
+                                stripe_subscription_id=stripe_subscription.id,
+                                status=SubscriptionStatus.ACTIVE,
+                                current_period_start=datetime.fromtimestamp(stripe_subscription.current_period_start, tz=timezone.utc),
+                                current_period_end=datetime.fromtimestamp(stripe_subscription.current_period_end, tz=timezone.utc),
+                                cancel_at_period_end=False
+                            )
+    
+    elif event["type"] == "customer.subscription.created":
+        stripe_subscription = event["data"]["object"]
+        subscription_id = stripe_subscription.get("id")
+        
+        # Find subscription by stripe_subscription_id
+        subscription = await RestaurantSubscription.get_or_none(stripe_subscription_id=subscription_id)
+        if subscription:
+            subscription.status = SubscriptionStatus.ACTIVE
+            subscription.current_period_start = datetime.fromtimestamp(stripe_subscription.get("current_period_start"), tz=timezone.utc)
+            subscription.current_period_end = datetime.fromtimestamp(stripe_subscription.get("current_period_end"), tz=timezone.utc)
+            await subscription.save()
+    
+    elif event["type"] == "customer.subscription.updated":
+        stripe_subscription = event["data"]["object"]
+        subscription_id = stripe_subscription.get("id")
+        
+        subscription = await RestaurantSubscription.get_or_none(stripe_subscription_id=subscription_id)
+        if subscription:
+            status_map = {
+                "active": SubscriptionStatus.ACTIVE,
+                "canceled": SubscriptionStatus.CANCELED,
+                "past_due": SubscriptionStatus.PAST_DUE,
+                "trialing": SubscriptionStatus.TRIALING,
+            }
+            stripe_status = stripe_subscription.get("status")
+            subscription.status = status_map.get(stripe_status, SubscriptionStatus.ACTIVE)
+            subscription.current_period_start = datetime.fromtimestamp(stripe_subscription.get("current_period_start"), tz=timezone.utc)
+            subscription.current_period_end = datetime.fromtimestamp(stripe_subscription.get("current_period_end"), tz=timezone.utc)
+            subscription.cancel_at_period_end = stripe_subscription.get("cancel_at_period_end", False)
+            await subscription.save()
+    
+    elif event["type"] == "customer.subscription.deleted":
+        stripe_subscription = event["data"]["object"]
+        subscription_id = stripe_subscription.get("id")
+        
+        subscription = await RestaurantSubscription.get_or_none(stripe_subscription_id=subscription_id)
+        if subscription:
+            subscription.status = SubscriptionStatus.CANCELED
+            await subscription.save()
+    
+    elif event["type"] == "invoice.payment_succeeded":
+        invoice = event["data"]["object"]
+        subscription_id = invoice.get("subscription")
+        
+        if subscription_id:
+            subscription = await RestaurantSubscription.get_or_none(stripe_subscription_id=subscription_id)
+            if subscription:
+                # Update period dates if subscription was renewed
+                import stripe
+                stripe_subscription = stripe.Subscription.retrieve(subscription_id)
+                subscription.current_period_start = datetime.fromtimestamp(stripe_subscription.current_period_start, tz=timezone.utc)
+                subscription.current_period_end = datetime.fromtimestamp(stripe_subscription.current_period_end, tz=timezone.utc)
+                subscription.status = SubscriptionStatus.ACTIVE
+                await subscription.save()
+    
+    elif event["type"] == "invoice.payment_failed":
+        invoice = event["data"]["object"]
+        subscription_id = invoice.get("subscription")
+        
+        if subscription_id:
+            subscription = await RestaurantSubscription.get_or_none(stripe_subscription_id=subscription_id)
+            if subscription:
+                subscription.status = SubscriptionStatus.PAST_DUE
+                await subscription.save()
     
     return {"status": "success"}
 

@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from models.menu import Menu, MenuIn_Pydantic, Menu_Pydantic
 from models.category import Category, CategoryIn_Pydantic, Category_Pydantic
 from models.menu_item import MenuItem, MenuItemIn_Pydantic, MenuItem_Pydantic
-from models.menu_item_addon import MenuItemAddon, MenuItemAddonIn_Pydantic, MenuItemAddon_Pydantic
+from models.menu_item_addon import MenuItemAddon
+from models.addon import Addon, Addon_Pydantic
 from models.ingredient import Ingredient, Ingredient_Pydantic
 from models.menu_item_ingredient import MenuItemIngredient
 from models.meal_item import MealItem, MealItem_Pydantic
@@ -26,7 +27,7 @@ class ItemCreateRequest(BaseModel):
     category_ids: List[int] = []  # List of category IDs
     menu_id: Optional[int] = None  # Menu ID for import/organization (keep for backward compatibility)
     ingredient_ids: Optional[List[int]] = []
-    addons: Optional[List[dict]] = []
+    addon_ids: Optional[List[int]] = []
     external_id: Optional[str] = None
     meal_item_ids: Optional[List[int]] = []
 
@@ -38,6 +39,7 @@ class ItemUpdateRequest(BaseModel):
     category_ids: Optional[List[int]] = None  # List of category IDs
     menu_id: Optional[int] = None  # Menu ID for import/organization
     ingredient_ids: Optional[List[int]] = None
+    addon_ids: Optional[List[int]] = None
     meal_item_ids: Optional[List[int]] = None
     external_id: Optional[str] = None
 
@@ -57,16 +59,22 @@ async def get_public_menu(restaurant_id: int):
     categories = await Category.filter(restaurant=restaurant).all()
     
     # Get all items for this restaurant (through menu relationship)
-    all_items = await MenuItem.filter(menu__restaurant=restaurant).prefetch_related("addons", "categories").distinct()
+    all_items = await MenuItem.filter(menu__restaurant=restaurant).prefetch_related("categories").distinct()
     
     result = []
     for category in categories:
         # Get items for this specific category
-        items = await MenuItem.filter(categories__id=category.id, menu__restaurant=restaurant).prefetch_related("addons").distinct()
+        items = await MenuItem.filter(categories__id=category.id, menu__restaurant=restaurant).prefetch_related("categories").distinct()
         items_data = []
         for item in items:
             item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
-            addons = await item.addons.filter(is_available=True).all()
+            # Get addons for this item via junction table
+            menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+            addons = []
+            for mia in menu_item_addons:
+                addon = await mia.addon
+                if addon.is_available:
+                    addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
             # Get ingredients for this item
             menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
             ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
@@ -79,7 +87,7 @@ async def get_public_menu(restaurant_id: int):
                     meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
             items_data.append({
                 **item_dict.dict(),
-                "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
+                "addons": [addon.dict() for addon in addons],
                 "ingredients": [ing.dict() for ing in ingredients],
                 "meal_items": [meal.dict() for meal in meal_items]
             })
@@ -92,7 +100,13 @@ async def get_public_menu(restaurant_id: int):
     all_items_data = []
     for item in all_items:
         item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
-        addons = await item.addons.filter(is_available=True).all()
+        # Get addons for this item via junction table
+        menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+        addons = []
+        for mia in menu_item_addons:
+            addon = await mia.addon
+            if addon.is_available:
+                addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
         menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
         ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
         menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
@@ -103,7 +117,7 @@ async def get_public_menu(restaurant_id: int):
                 meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
         all_items_data.append({
             **item_dict.dict(),
-            "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
+            "addons": [addon.dict() for addon in addons],
             "ingredients": [ing.dict() for ing in ingredients],
             "meal_items": [meal.dict() for meal in meal_items]
         })
@@ -123,11 +137,16 @@ async def get_menu(restaurant_id: int):
     menus = await Menu.filter(restaurant=restaurant).all()
     result = []
     for menu in menus:
-        items = await MenuItem.filter(menu_id=menu.id).prefetch_related("addons").distinct()
+        items = await MenuItem.filter(menu_id=menu.id).prefetch_related("categories").distinct()
         items_data = []
         for item in items:
             item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
-            addons = await item.addons.all()
+            # Get addons for this item via junction table
+            menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+            addons = []
+            for mia in menu_item_addons:
+                addon = await mia.addon
+                addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
             # Get ingredients for this item
             menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
             ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
@@ -140,7 +159,7 @@ async def get_menu(restaurant_id: int):
                     meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
             items_data.append({
                 **item_dict.dict(),
-                "addons": [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons],
+                "addons": [addon.dict() for addon in addons],
                 "ingredients": [ing.dict() for ing in ingredients],
                 "meal_items": [meal.dict() for meal in meal_items]
             })
@@ -152,8 +171,13 @@ async def get_menu(restaurant_id: int):
 
 @router.post("/{restaurant_id}/menus", response_model=Menu_Pydantic)
 async def create_menu(restaurant_id: int, menu_in: MenuIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menu = await Menu.create(restaurant=restaurant, **menu_in.dict())
@@ -161,8 +185,13 @@ async def create_menu(restaurant_id: int, menu_in: MenuIn_Pydantic, user: User =
 
 @router.put("/{restaurant_id}/menus/{menu_id}", response_model=Menu_Pydantic)
 async def update_menu(restaurant_id: int, menu_id: int, menu_in: MenuIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
@@ -175,8 +204,13 @@ async def update_menu(restaurant_id: int, menu_id: int, menu_in: MenuIn_Pydantic
 
 @router.get("/{restaurant_id}/menus")
 async def list_menus(restaurant_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menus = await Menu.filter(restaurant=restaurant).all()
@@ -192,8 +226,13 @@ async def list_menus(restaurant_id: int, user: User = Depends(get_current_user))
 
 @router.delete("/{restaurant_id}/menus/{menu_id}")
 async def delete_menu(restaurant_id: int, menu_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
@@ -210,8 +249,13 @@ async def delete_menu(restaurant_id: int, menu_id: int, user: User = Depends(get
 # Category Management Endpoints
 @router.post("/{restaurant_id}/categories", response_model=Category_Pydantic)
 async def create_category(restaurant_id: int, category_in: CategoryIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     category = await Category.create(restaurant=restaurant, **category_in.dict())
@@ -219,8 +263,13 @@ async def create_category(restaurant_id: int, category_in: CategoryIn_Pydantic, 
 
 @router.get("/{restaurant_id}/categories")
 async def list_categories(restaurant_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     categories = await Category.filter(restaurant=restaurant).all()
@@ -236,8 +285,13 @@ async def list_categories(restaurant_id: int, user: User = Depends(get_current_u
 
 @router.put("/{restaurant_id}/categories/{category_id}", response_model=Category_Pydantic)
 async def update_category(restaurant_id: int, category_id: int, category_in: CategoryIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     category = await Category.get_or_none(id=category_id, restaurant=restaurant)
@@ -250,8 +304,13 @@ async def update_category(restaurant_id: int, category_id: int, category_in: Cat
 
 @router.delete("/{restaurant_id}/categories/{category_id}")
 async def delete_category(restaurant_id: int, category_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     category = await Category.get_or_none(id=category_id, restaurant=restaurant)
@@ -284,8 +343,13 @@ async def import_menu_items(
     - Column E: Item Image (cell with embedded image)
     """
     # Verify authorization
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     # Validate file type
@@ -324,8 +388,13 @@ async def import_menu_items(
 
 @router.post("/{restaurant_id}/items", response_model=MenuItem_Pydantic)
 async def add_item(restaurant_id: int, item_request: ItemCreateRequest, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     # Validate menu_id if provided (required for organization/import)
@@ -376,17 +445,16 @@ async def add_item(restaurant_id: int, item_request: ItemCreateRequest, user: Us
         for ingredient in ingredients:
             await MenuItemIngredient.create(menu_item=item, ingredient=ingredient)
     
-    # Create add-ons if provided
-    if item_request.addons:
-        for addon_data in item_request.addons:
-            await MenuItemAddon.create(
-                menu_item=item,
-                name=addon_data.get('name'),
-                description=addon_data.get('description'),
-                price_adjustment=addon_data.get('price_adjustment', 0),
-                image_url=addon_data.get('image_url'),
-                is_available=addon_data.get('is_available', True)
-            )
+    # Add add-ons if provided
+    if item_request.addon_ids:
+        # Verify all addons belong to this restaurant
+        addons = await Addon.filter(id__in=item_request.addon_ids, restaurant=restaurant).all()
+        if len(addons) != len(item_request.addon_ids):
+            raise HTTPException(400, "One or more addons not found or not authorized")
+        
+        # Create addon relationships
+        for addon in addons:
+            await MenuItemAddon.create(menu_item=item, addon=addon)
     
     # Add meal items if provided
     if item_request.meal_item_ids:
@@ -403,8 +471,13 @@ async def add_item(restaurant_id: int, item_request: ItemCreateRequest, user: Us
 
 @router.put("/{restaurant_id}/items/{item_id}", response_model=MenuItem_Pydantic)
 async def update_item(restaurant_id: int, item_id: int, item_request: ItemUpdateRequest, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     # Get item and verify it belongs to this restaurant (through menu relationship)
@@ -469,6 +542,22 @@ async def update_item(restaurant_id: int, item_id: int, item_request: ItemUpdate
             for ingredient in ingredients:
                 await MenuItemIngredient.create(menu_item=menu_item, ingredient=ingredient)
     
+    # Update addons if provided
+    if item_request.addon_ids is not None:
+        # Delete existing addon relationships
+        await MenuItemAddon.filter(menu_item=menu_item).delete()
+        
+        # Add new addon relationships
+        if item_request.addon_ids:
+            # Verify all addons belong to this restaurant
+            addons = await Addon.filter(id__in=item_request.addon_ids, restaurant=restaurant).all()
+            if len(addons) != len(item_request.addon_ids):
+                raise HTTPException(400, "One or more addons not found or not authorized")
+            
+            # Create addon relationships
+            for addon in addons:
+                await MenuItemAddon.create(menu_item=menu_item, addon=addon)
+    
     # Update meal items if provided
     if item_request.meal_item_ids is not None:
         # Delete existing meal item relationships
@@ -487,92 +576,15 @@ async def update_item(restaurant_id: int, item_id: int, item_request: ItemUpdate
     
     return await MenuItem_Pydantic.from_tortoise_orm(menu_item)
 
-@router.post("/{restaurant_id}/menus/{menu_id}/items/{item_id}/addons", response_model=MenuItemAddon_Pydantic)
-async def create_addon(restaurant_id: int, menu_id: int, item_id: int, addon_in: MenuItemAddonIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(403, "Not authorized")
-    
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
-    if not menu_item:
-        raise HTTPException(404, "Menu item not found")
-    
-    addon = await MenuItemAddon.create(menu_item=menu_item, **addon_in.dict())
-    return await MenuItemAddon_Pydantic.from_tortoise_orm(addon)
-
-@router.get("/{restaurant_id}/menus/{menu_id}/items/{item_id}/addons")
-async def get_addons(restaurant_id: int, menu_id: int, item_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(403, "Not authorized")
-    
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
-    if not menu_item:
-        raise HTTPException(404, "Menu item not found")
-    
-    addons = await MenuItemAddon.filter(menu_item=menu_item).all()
-    return [await MenuItemAddon_Pydantic.from_tortoise_orm(addon) for addon in addons]
-
-@router.put("/{restaurant_id}/menus/{menu_id}/items/{item_id}/addons/{addon_id}", response_model=MenuItemAddon_Pydantic)
-async def update_addon(restaurant_id: int, menu_id: int, item_id: int, addon_id: int, addon_in: MenuItemAddonIn_Pydantic, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(403, "Not authorized")
-    
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
-    if not menu_item:
-        raise HTTPException(404, "Menu item not found")
-    
-    addon = await MenuItemAddon.get_or_none(id=addon_id, menu_item=menu_item)
-    if not addon:
-        raise HTTPException(404, "Add-on not found")
-    
-    addon_data = addon_in.dict()
-    addon.name = addon_data.get('name', addon.name)
-    addon.description = addon_data.get('description', addon.description)
-    addon.price_adjustment = addon_data.get('price_adjustment', addon.price_adjustment)
-    addon.image_url = addon_data.get('image_url', addon.image_url)
-    addon.is_available = addon_data.get('is_available', addon.is_available)
-    await addon.save()
-    return await MenuItemAddon_Pydantic.from_tortoise_orm(addon)
-
-@router.delete("/{restaurant_id}/menus/{menu_id}/items/{item_id}/addons/{addon_id}")
-async def delete_addon(restaurant_id: int, menu_id: int, item_id: int, addon_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(403, "Not authorized")
-    
-    menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)
-    if not menu:
-        raise HTTPException(404, "Menu not found")
-    
-    menu_item = await MenuItem.get_or_none(id=item_id, menu=menu)
-    if not menu_item:
-        raise HTTPException(404, "Menu item not found")
-    
-    addon = await MenuItemAddon.get_or_none(id=addon_id, menu_item=menu_item)
-    if not addon:
-        raise HTTPException(404, "Add-on not found")
-    
-    await addon.delete()
-    return {"message": "Add-on deleted successfully"}
-
 @router.delete("/{restaurant_id}/items/{item_id}")
 async def delete_item(restaurant_id: int, item_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menu_item = await MenuItem.filter(id=item_id, menu__restaurant=restaurant).first()
@@ -589,8 +601,13 @@ async def delete_items_bulk(
     item_ids: list[int] = Body(...), 
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     menu = await Menu.get_or_none(id=menu_id, restaurant=restaurant)

@@ -10,6 +10,7 @@ from models.order_meal_item import OrderMealItem, OrderMealItem_Pydantic
 from models.restaurant import Restaurant
 from models.menu_item import MenuItem
 from models.menu_item_addon import MenuItemAddon
+from models.addon import Addon
 from models.meal_item import MealItem
 from models.user import User, Role
 from services.auth import get_current_user, get_optional_user
@@ -158,14 +159,24 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         
         if addon_map:
             addon_ids = list(addon_map.keys())
-            addons = await MenuItemAddon.filter(
+            # Verify addons belong to restaurant and are linked to this menu item
+            addons = await Addon.filter(
                 id__in=addon_ids,
-                menu_item=menu_item,
+                restaurant=restaurant,
                 is_available=True
             ).all()
             
             if len(addons) != len(addon_ids):
                 raise HTTPException(status_code=400, detail="One or more selected add-ons are invalid or unavailable")
+            
+            # Verify addons are actually linked to this menu item via junction table
+            linked_count = await MenuItemAddon.filter(
+                menu_item=menu_item,
+                addon__id__in=addon_ids
+            ).count()
+            
+            if linked_count != len(addon_ids):
+                raise HTTPException(status_code=400, detail="One or more selected add-ons are not available for this menu item")
             
             for addon in addons:
                 quantity = addon_map[addon.id]
@@ -297,7 +308,14 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
         addons = await oi.addons.all().prefetch_related("addon")
         addons_data = []
         for oa in addons:
-            addon = await oa.addon
+            if not oa.addon_id:
+                continue
+            try:
+                addon = await oa.addon
+                if addon is None:
+                    continue
+            except (AttributeError, TypeError):
+                continue
             addons_data.append({
                 "id": addon.id,
                 "name": addon.name,
@@ -349,7 +367,14 @@ async def get_my_orders(user: User = Depends(get_current_user)):
             addons = await oi.addons.all().prefetch_related("addon")
             addons_data = []
             for oa in addons:
-                addon = await oa.addon
+                if not oa.addon_id:
+                    continue
+                try:
+                    addon = await oa.addon
+                    if addon is None:
+                        continue
+                except (AttributeError, TypeError):
+                    continue
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
@@ -379,12 +404,14 @@ async def get_restaurant_orders(
     table_number: Optional[int] = Query(None),
     user: User = Depends(get_current_user)
 ):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can view restaurant orders")
-    
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can view restaurant orders")
     
     # Build filter
     filters = {"restaurant": restaurant}
@@ -409,7 +436,14 @@ async def get_restaurant_orders(
             addons = await oi.addons.all().prefetch_related("addon")
             addons_data = []
             for oa in addons:
-                addon = await oa.addon
+                if not oa.addon_id:
+                    continue
+                try:
+                    addon = await oa.addon
+                    if addon is None:
+                        continue
+                except (AttributeError, TypeError):
+                    continue
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
@@ -428,22 +462,22 @@ async def get_restaurant_orders(
         result.append({
             **order_dict.dict(),
             "customer_username": customer.username if customer else None,
+            "customer_email": customer.email if customer else None,
             "items": items_data
         })
     return result
 
 @router.patch("/orders/{order_id}/status")
 async def update_order_status(order_id: int, status_data: UpdateOrderStatusRequest, user: User = Depends(get_current_user)):
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can update order status")
-    
     order = await Order.get_or_none(id=order_id).prefetch_related("restaurant")
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
     restaurant = await order.restaurant
-    if restaurant.owner_id != user.id:
+    if user.role != Role.SUPERADMIN and restaurant.owner_id != user.id:
         raise HTTPException(status_code=403, detail="You don't have access to this order")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can update order status")
     
     try:
         order.status = OrderStatus(status_data.status)
@@ -510,12 +544,14 @@ async def get_orders_large_display(
     user: User = Depends(get_current_user)
 ):
     """Get orders for large display screen (admin only)"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can access large orders display")
-    
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can access large orders display")
     
     # Get orders with status: pending, confirmed, preparing, ready
     orders = await Order.filter(
@@ -543,7 +579,14 @@ async def get_orders_large_display(
             addons = await oi.addons.all().prefetch_related("addon")
             addons_data = []
             for oa in addons:
-                addon = await oa.addon
+                if not oa.addon_id:
+                    continue
+                try:
+                    addon = await oa.addon
+                    if addon is None:
+                        continue
+                except (AttributeError, TypeError):
+                    continue
                 addons_data.append({
                     "id": addon.id,
                     "name": addon.name,
@@ -562,6 +605,7 @@ async def get_orders_large_display(
         result.append({
             **order_dict.dict(),
             "customer_username": customer.username if customer else None,
+            "customer_email": customer.email if customer else None,
             "items": items_data,
             "status_priority": status_priority.get(order.status, 99)
         })

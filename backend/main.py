@@ -14,8 +14,12 @@ from controllers.file_controller import router as file_router
 from controllers.stripe_controller import router as stripe_router
 from controllers.platform_settings_controller import router as platform_settings_router
 from controllers.ingredient_controller import router as ingredient_router
+from controllers.addon_controller import router as addon_router
 from controllers.generated_menu_controller import router as generated_menu_router
 from controllers.meal_item_controller import router as meal_item_router
+from controllers.membership_plan_controller import router as membership_plan_router
+from controllers.subscription_controller import router as subscription_router
+from controllers.receipt_controller import router as receipt_router
 from helpers.lifespan import lifespan
 
 @asynccontextmanager
@@ -48,8 +52,12 @@ app.include_router(file_router, prefix="/files")
 app.include_router(stripe_router, prefix="")
 app.include_router(platform_settings_router, prefix="")
 app.include_router(ingredient_router, prefix="/restaurants")
+app.include_router(addon_router, prefix="/restaurants")
 app.include_router(generated_menu_router, prefix="")
 app.include_router(meal_item_router, prefix="/restaurants")
+app.include_router(membership_plan_router, prefix="/membership-plans")
+app.include_router(subscription_router, prefix="/subscriptions")
+app.include_router(receipt_router, prefix="")
 
 # Mount static files for uploads with CORS support
 if os.path.exists("uploads"):

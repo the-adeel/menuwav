@@ -173,3 +173,194 @@ async def handle_webhook(payload: bytes, sig_header: str):
     
     event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     return event
+
+async def create_stripe_price(amount: float, currency: str = "usd", interval: str = "month"):
+    """
+    Create a Stripe Price object for recurring subscriptions.
+    Supports $0 amounts and "day" or "month" intervals.
+    
+    Args:
+        amount: Price amount in dollars (can be 0.00)
+        currency: Currency code (default: "usd")
+        interval: Billing interval - "day" or "month" (default: "month")
+    
+    Returns:
+        Stripe Price object
+    """
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY is not set in environment variables")
+    
+    if interval not in ["day", "month"]:
+        raise ValueError("interval must be 'day' or 'month'")
+    
+    # Convert dollars to cents
+    amount_cents = int(float(amount) * 100)
+    
+    price_data = {
+        "currency": currency,
+        "recurring": {
+            "interval": interval,
+        },
+        "unit_amount": amount_cents,
+        "product_data": {
+            "name": f"Membership Plan ({interval}ly)"
+        },
+    }
+    
+    try:
+        price = stripe.Price.create(**price_data)
+        return price
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'user_message'):
+            error_msg = e.user_message
+        if hasattr(e, 'code'):
+            error_msg = f"{error_msg} (code: {e.code})"
+        raise ValueError(f"Stripe API error creating price: {error_msg}")
+
+async def create_or_get_stripe_customer(email: str = None, metadata: dict = None):
+    """
+    Create a Stripe Customer or get existing one by email.
+    
+    Args:
+        email: Customer email
+        metadata: Optional metadata dict
+    
+    Returns:
+        Stripe Customer object
+    """
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY is not set in environment variables")
+    
+    customer_data = {}
+    if email:
+        customer_data["email"] = email
+    if metadata:
+        customer_data["metadata"] = metadata
+    
+    try:
+        # If email provided, try to find existing customer first
+        if email:
+            customers = stripe.Customer.list(email=email, limit=1)
+            if customers.data:
+                return customers.data[0]
+        
+        # Create new customer
+        customer = stripe.Customer.create(**customer_data)
+        return customer
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'user_message'):
+            error_msg = e.user_message
+        if hasattr(e, 'code'):
+            error_msg = f"{error_msg} (code: {e.code})"
+        raise ValueError(f"Stripe API error creating customer: {error_msg}")
+
+async def create_subscription_directly(customer_id: str, price_id: str, metadata: dict = None):
+    """
+    Create a subscription directly via Stripe API.
+    Works for both $0 and paid plans.
+    
+    Args:
+        customer_id: Stripe Customer ID
+        price_id: Stripe Price ID
+        metadata: Optional metadata dict
+    
+    Returns:
+        Stripe Subscription object
+    """
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY is not set in environment variables")
+    
+    subscription_data = {
+        "customer": customer_id,
+        "items": [{"price": price_id}],
+    }
+    
+    if metadata:
+        subscription_data["metadata"] = metadata
+    
+    try:
+        subscription = stripe.Subscription.create(**subscription_data)
+        return subscription
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'user_message'):
+            error_msg = e.user_message
+        if hasattr(e, 'code'):
+            error_msg = f"{error_msg} (code: {e.code})"
+        raise ValueError(f"Stripe API error creating subscription: {error_msg}")
+
+async def create_checkout_session_for_subscription(
+    customer_id: str,
+    price_id: str,
+    success_url: str,
+    cancel_url: str,
+    metadata: dict = None
+):
+    """
+    Create a Stripe Checkout Session for subscription signup.
+    Works for both $0 and paid plans.
+    
+    Args:
+        customer_id: Stripe Customer ID
+        price_id: Stripe Price ID
+        success_url: URL to redirect after successful payment
+        cancel_url: URL to redirect if user cancels
+        metadata: Optional metadata dict
+    
+    Returns:
+        Stripe Checkout Session object
+    """
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY is not set in environment variables")
+    
+    session_data = {
+        "customer": customer_id,
+        "mode": "subscription",
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+    }
+    
+    if metadata:
+        session_data["metadata"] = metadata
+    
+    try:
+        session = stripe.checkout.Session.create(**session_data)
+        return session
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'user_message'):
+            error_msg = e.user_message
+        if hasattr(e, 'code'):
+            error_msg = f"{error_msg} (code: {e.code})"
+        raise ValueError(f"Stripe API error creating checkout session: {error_msg}")
+
+async def create_customer_portal_session(customer_id: str, return_url: str):
+    """
+    Create a Stripe Customer Portal session for subscription management.
+    
+    Args:
+        customer_id: Stripe Customer ID
+        return_url: URL to return to after portal session
+    
+    Returns:
+        Stripe Billing Portal Session object
+    """
+    if not stripe.api_key:
+        raise ValueError("STRIPE_SECRET_KEY is not set in environment variables")
+    
+    try:
+        portal_session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+        return portal_session
+    except Exception as e:
+        error_msg = str(e)
+        if hasattr(e, 'user_message'):
+            error_msg = e.user_message
+        if hasattr(e, 'code'):
+            error_msg = f"{error_msg} (code: {e.code})"
+        raise ValueError(f"Stripe API error creating portal session: {error_msg}")

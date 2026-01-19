@@ -14,8 +14,13 @@ class IngredientCreateRequest(BaseModel):
 
 @router.get("/{restaurant_id}/ingredients", response_model=List[Ingredient_Pydantic])
 async def list_ingredients(restaurant_id: int, user: User = Depends(get_current_user)):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     ingredients = await Ingredient.filter(restaurant=restaurant).order_by("name")
@@ -27,8 +32,13 @@ async def create_ingredients(
     request: IngredientCreateRequest = Body(...),
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     # Parse comma-separated names
@@ -63,8 +73,13 @@ async def update_ingredient(
     ingredient_in: IngredientIn_Pydantic,
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     ingredient = await Ingredient.get_or_none(id=ingredient_id, restaurant=restaurant)
@@ -87,8 +102,13 @@ async def delete_ingredient(
     ingredient_id: int,
     user: User = Depends(get_current_user)
 ):
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
-    if not restaurant or user.role != Role.RESTAURANT_ADMIN:
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
         raise HTTPException(403, "Not authorized")
     
     ingredient = await Ingredient.get_or_none(id=ingredient_id, restaurant=restaurant)

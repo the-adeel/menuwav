@@ -55,13 +55,14 @@ async def create_generated_menu(
     user: User = Depends(get_current_user)
 ):
     """Save a generated menu image with metadata"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can save generated menus")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can save generated menus")
     
     # Validate orientation
     if orientation not in ['portrait', 'wide']:
@@ -102,13 +103,14 @@ async def list_generated_menus(
     user: User = Depends(get_current_user)
 ):
     """List all generated menus for a restaurant"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can view generated menus")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can view generated menus")
     
     # Get all generated menus for this restaurant
     generated_menus = await GeneratedMenu.filter(restaurant=restaurant).order_by('-created_at')
@@ -122,13 +124,14 @@ async def download_generated_menu(
     user: User = Depends(get_current_user)
 ):
     """Download a generated menu image"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can download generated menus")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can download generated menus")
     
     # Get the generated menu
     generated_menu = await GeneratedMenu.get_or_none(id=menu_id, restaurant=restaurant)
@@ -154,13 +157,14 @@ async def delete_generated_menu(
     user: User = Depends(get_current_user)
 ):
     """Delete a single generated menu"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can delete generated menus")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can delete generated menus")
     
     # Get the generated menu
     generated_menu = await GeneratedMenu.get_or_none(id=menu_id, restaurant=restaurant)
@@ -187,13 +191,14 @@ async def delete_generated_menus_bulk(
     user: User = Depends(get_current_user)
 ):
     """Delete multiple generated menus"""
-    if user.role != Role.RESTAURANT_ADMIN:
-        raise HTTPException(status_code=403, detail="Only restaurant admins can delete generated menus")
-    
-    # Verify restaurant ownership
-    restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
     if not restaurant:
-        raise HTTPException(status_code=404, detail="Restaurant not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(status_code=403, detail="Only restaurant admins can delete generated menus")
     
     # Get the generated menus
     generated_menus = await GeneratedMenu.filter(id__in=menu_ids, restaurant=restaurant).all()
