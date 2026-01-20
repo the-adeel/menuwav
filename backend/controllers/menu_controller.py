@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
+from fastapi.responses import FileResponse
 from pathlib import Path
 import tempfile
 import os
 from typing import List, Optional
 from pydantic import BaseModel
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
 
 from models.menu import Menu, MenuIn_Pydantic, Menu_Pydantic
 from models.category import Category, CategoryIn_Pydantic, Category_Pydantic
@@ -385,6 +388,92 @@ async def import_menu_items(
                 os.unlink(temp_file_path)
             except Exception:
                 pass
+
+@router.get("/{restaurant_id}/import/sample")
+async def download_sample_excel(
+    restaurant_id: int,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user)
+):
+    """
+    Download a sample Excel file with the correct format for menu import
+    """
+    # Verify authorization
+    if user.role == Role.SUPERADMIN:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id)
+    else:
+        restaurant = await Restaurant.get_or_none(id=restaurant_id, owner=user)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    if user.role != Role.SUPERADMIN and user.role != Role.RESTAURANT_ADMIN:
+        raise HTTPException(403, "Not authorized")
+    
+    # Create a new workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Menu Import Sample"
+    
+    # Set headers with styling
+    headers = ["Menu Name", "Item Name", "Category", "Item Description", "Price", "Image", "ID"]
+    header_font = Font(bold=True, size=12)
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.alignment = header_alignment
+    
+    # Add sample data rows
+    sample_data = [
+        ["Lunch Menu", "Caesar Salad", "Salads", "Fresh romaine lettuce with Caesar dressing", "12.99", "", "ITEM001"],
+        ["Lunch Menu", "Grilled Chicken", "Main Course", "Tender grilled chicken breast with herbs", "18.50", "", "ITEM002"],
+        ["Dinner Menu", "Margherita Pizza", "Pizza", "Classic pizza with tomato, mozzarella, and basil", "15.99", "", "ITEM003"],
+        ["Dinner Menu", "Chocolate Cake", "Desserts", "Rich chocolate cake with frosting", "8.99", "", "ITEM004"],
+        ["Breakfast Menu", "Pancakes", "Breakfast", "Fluffy pancakes with maple syrup", "10.99", "", "ITEM005"],
+    ]
+    
+    for row_idx, row_data in enumerate(sample_data, start=2):
+        for col_idx, value in enumerate(row_data, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+    
+    # Adjust column widths for better readability
+    column_widths = [15, 20, 15, 40, 10, 15, 10]
+    for col_idx, width in enumerate(column_widths, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+    
+    # Create temporary file
+    temp_file = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+            temp_file_path = temp_file.name
+            wb.save(temp_file_path)
+        
+        # Schedule cleanup of temp file after response is sent
+        def cleanup_temp_file(file_path: str):
+            try:
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+            except Exception:
+                pass  # Ignore cleanup errors
+        
+        background_tasks.add_task(cleanup_temp_file, temp_file_path)
+        
+        # Return the file as a download
+        return FileResponse(
+            temp_file_path,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename="menu_import_sample.xlsx",
+            headers={"Content-Disposition": "attachment; filename=menu_import_sample.xlsx"}
+        )
+    
+    except Exception as e:
+        # Clean up temp file on error
+        if temp_file and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception:
+                pass
+        raise HTTPException(500, f"Failed to generate sample Excel file: {str(e)}")
 
 @router.post("/{restaurant_id}/items", response_model=MenuItem_Pydantic)
 async def add_item(restaurant_id: int, item_request: ItemCreateRequest, user: User = Depends(get_current_user)):
