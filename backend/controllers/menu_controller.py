@@ -17,7 +17,7 @@ from models.ingredient import Ingredient, Ingredient_Pydantic
 from models.menu_item_ingredient import MenuItemIngredient
 from models.meal_item import MealItem, MealItem_Pydantic
 from models.menu_item_meal_item import MenuItemMealItem
-from models.restaurant import Restaurant, Restaurant_Pydantic
+from models.restaurant import Restaurant
 from models.user import User, Role
 from services.auth import get_current_user
 from services.menu_import import import_menu_from_excel
