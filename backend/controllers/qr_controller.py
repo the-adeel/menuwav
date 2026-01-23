@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body
 from typing import List
 from pydantic import BaseModel
+import os
 
 from models.restaurant import Restaurant
 from models.qr_code import QRCode, QRCode_Pydantic, QRType
@@ -11,6 +12,40 @@ router = APIRouter()
 
 class GenerateTableQRRequest(BaseModel):
     number_of_tables: int
+
+def get_restaurant_menu_url(restaurant: Restaurant, table_number: int = None) -> str:
+    """Generate restaurant menu URL using subdomain if available, otherwise fallback to ID route"""
+    base_domain = os.getenv("FRONTEND_DOMAIN", "menuwav.com")
+    
+    # Determine protocol and handle localhost
+    if "localhost" in base_domain or "127.0.0.1" in base_domain:
+        protocol = "http"
+        # For localhost, use subdomain.localhost format
+        if restaurant.subdomain:
+            base_url = f"{protocol}://{restaurant.subdomain}.{base_domain}"
+            if table_number:
+                return f"{base_url}?table={table_number}"
+            return base_url
+        # Fallback for localhost
+        base_url = f"{protocol}://{base_domain}"
+        if table_number:
+            return f"{base_url}/menu/{restaurant.id}?table={table_number}"
+        return f"{base_url}/menu/{restaurant.id}"
+    else:
+        # Production domain
+        protocol = "https"
+        # Use subdomain if available
+        if restaurant.subdomain:
+            base_url = f"{protocol}://{restaurant.subdomain}.{base_domain}"
+            if table_number:
+                return f"{base_url}?table={table_number}"
+            return base_url
+        
+        # Fallback to restaurant ID route
+        base_url = f"{protocol}://{base_domain}"
+        if table_number:
+            return f"{base_url}/menu/{restaurant.id}?table={table_number}"
+        return f"{base_url}/menu/{restaurant.id}"
 
 @router.post("/{restaurant_id}/qr/generate-table")
 async def generate_table_qr(restaurant_id: int, request: GenerateTableQRRequest, user: User = Depends(get_current_user)):
@@ -27,10 +62,9 @@ async def generate_table_qr(restaurant_id: int, request: GenerateTableQRRequest,
         raise HTTPException(status_code=400, detail="Number of tables must be at least 1")
     
     qr_codes = []
-    base_url = "http://localhost:5173"  # Frontend URL - adjust as needed
     
     for table_num in range(1, request.number_of_tables + 1):
-        qr_url = f"{base_url}/menu/{restaurant_id}?table={table_num}"
+        qr_url = get_restaurant_menu_url(restaurant, table_num)
         qr_code = await QRCode.create(
             restaurant=restaurant,
             table_number=table_num,
@@ -57,8 +91,7 @@ async def generate_restaurant_qr(restaurant_id: int, user: User = Depends(get_cu
     if existing_qr:
         return await QRCode_Pydantic.from_tortoise_orm(existing_qr)
     
-    base_url = "http://localhost:5173"  # Frontend URL - adjust as needed
-    qr_url = f"{base_url}/menu/{restaurant_id}"
+    qr_url = get_restaurant_menu_url(restaurant)
     
     qr_code = await QRCode.create(
         restaurant=restaurant,
