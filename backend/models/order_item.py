@@ -9,6 +9,7 @@ class OrderItem(Model):
     quantity = fields.IntField(default=1)
     price_at_time = fields.DecimalField(max_digits=10, decimal_places=2)
     meal_charge = fields.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    note = fields.TextField(null=True)
 
 OrderItem_Pydantic = pydantic_model_creator(OrderItem, name="OrderItem")
 OrderItemIn_Pydantic = pydantic_model_creator(OrderItem, name="OrderItemIn", exclude_readonly=True)

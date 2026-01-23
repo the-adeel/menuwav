@@ -94,6 +94,7 @@ class OrderItemRequest(BaseModel):
     selected_addon_ids: List[int] = []  # Legacy support - will be converted to selected_addons
     selected_addons: List[AddonRequest] = []  # New format with quantities
     selected_meal_items: List[MealItemRequest] = []  # Meal items for make a meal
+    note: Optional[str] = None
 
 class CreateOrderRequest(BaseModel):
     restaurant_id: int
@@ -235,7 +236,8 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
             'price_at_time': menu_item.price,
             'selected_addons': selected_addons,
             'selected_meal_items': selected_meal_items,
-            'meal_charge': meal_charge
+            'meal_charge': meal_charge,
+            'note': item_req.note if item_req.note and item_req.note.strip() else None
         })
     
     # Validate order_type
@@ -275,7 +277,8 @@ async def create_order(order_data: CreateOrderRequest, customer: Optional[User] 
             menu_item=item_data['menu_item'],
             quantity=item_data['quantity'],
             price_at_time=item_data['price_at_time'],
-            meal_charge=item_data.get('meal_charge', Decimal('0.00'))
+            meal_charge=item_data.get('meal_charge', Decimal('0.00')),
+            note=item_data.get('note')
         )
         
         # Create order item add-ons

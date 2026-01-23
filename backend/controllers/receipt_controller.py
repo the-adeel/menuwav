@@ -24,7 +24,10 @@ async def get_printers(restaurant_id: int, user: User = Depends(get_current_user
     """
     Get list of available printers on the system.
     Only accessible by restaurant admins and superadmins.
+    Returns a list of printer names, always including test/virtual printers for testing.
     """
+    import platform
+    
     # Verify user has access to restaurant
     if user.role == Role.SUPERADMIN:
         restaurant = await Restaurant.get_or_none(id=restaurant_id)
@@ -38,10 +41,40 @@ async def get_printers(restaurant_id: int, user: User = Depends(get_current_user
         raise HTTPException(status_code=403, detail="Only restaurant admins can access printers")
     
     try:
+        print(f"[RECEIPT_CONTROLLER] Fetching printers for restaurant {restaurant_id} (user: {user.username}, role: {user.role})")
         printers = list_printers()
+        
+        if not printers:
+            print(f"[RECEIPT_CONTROLLER] Warning: No printers detected. System: {platform.system()}")
+            # Return empty list with test printers - they should have been added by list_printers()
+            # But if somehow we still have none, provide a helpful message
+            return {
+                "printers": [],
+                "message": "No printers detected. Test printers should be available. Check server logs for details.",
+                "system": platform.system()
+            }
+        
+        print(f"[RECEIPT_CONTROLLER] Successfully retrieved {len(printers)} printers: {printers}")
         return {"printers": printers}
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing printers: {str(e)}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        print(f"[RECEIPT_CONTROLLER] Error listing printers: {str(e)}")
+        print(f"[RECEIPT_CONTROLLER] Traceback: {error_traceback}")
+        
+        # Provide more informative error message
+        system_info = f"System: {platform.system()}, Platform: {platform.platform()}"
+        error_detail = f"Error listing printers on {system_info}. Details: {str(e)}"
+        
+        # Even on error, try to return test printers if possible
+        # Note: list_printers() should have already added test printers, but if it failed early,
+        # we'll still return an error since the function handles test printers internally
+        
+        raise HTTPException(
+            status_code=500, 
+            detail=error_detail
+        )
 
 
 @router.post("/restaurants/{restaurant_id}/receipts/print")
@@ -89,11 +122,15 @@ async def print_receipt_endpoint(
     
     # Save receipt to database
     try:
+        # Sanitize receipt content to remove null bytes and other invalid UTF-8 sequences
+        # PostgreSQL doesn't allow null bytes (0x00) in UTF-8 strings
+        sanitized_receipt_data = receipt_content.replace('\x00', '').encode('utf-8', errors='ignore').decode('utf-8')
+        
         receipt = await Receipt.create(
             restaurant=restaurant,
             order=order,
             printer_name=request.printer_name,
-            receipt_data=receipt_content,
+            receipt_data=sanitized_receipt_data,
             printed_by=user
         )
         receipt_dict = await Receipt_Pydantic.from_tortoise_orm(receipt)

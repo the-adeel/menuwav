@@ -5,6 +5,7 @@ from tortoise.contrib.pydantic import pydantic_model_creator
 class Restaurant(Model):
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=255)
+    subdomain = fields.CharField(max_length=100, unique=True, null=True)
     owner = fields.ForeignKeyField("models.User", related_name="restaurants")
     is_approved = fields.BooleanField(default=False)
     address = fields.TextField(null=True)

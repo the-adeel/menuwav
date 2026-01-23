@@ -48,6 +48,90 @@ class ItemUpdateRequest(BaseModel):
 
 router = APIRouter()
 
+@router.get("/by-subdomain/{subdomain}/public")
+async def get_public_menu_by_subdomain(subdomain: str):
+    """Public endpoint for customers to view menu by subdomain (no auth required)"""
+    restaurant = await Restaurant.get_or_none(subdomain=subdomain)
+    if not restaurant:
+        raise HTTPException(404, "Restaurant not found")
+    
+    if not restaurant.is_approved:
+        raise HTTPException(403, "Restaurant is not approved")
+    
+    # Get all categories for this restaurant
+    categories = await Category.filter(restaurant=restaurant).all()
+    
+    # Get all items for this restaurant (through menu relationship)
+    all_items = await MenuItem.filter(menu__restaurant=restaurant).prefetch_related("categories").distinct()
+    
+    result = []
+    for category in categories:
+        # Get items for this specific category
+        items = await MenuItem.filter(categories__id=category.id, menu__restaurant=restaurant).prefetch_related("categories").distinct()
+        items_data = []
+        for item in items:
+            item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
+            # Get addons for this item via junction table
+            menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+            addons = []
+            for mia in menu_item_addons:
+                addon = await mia.addon
+                if addon.is_available:
+                    addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
+            # Get ingredients for this item
+            menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
+            ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
+            # Get meal items for this item
+            menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
+            meal_items = []
+            for mim in menu_item_meal_items:
+                meal_item = await mim.meal_item
+                if meal_item.is_available:
+                    meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
+            items_data.append({
+                **item_dict.dict(),
+                "addons": [addon.dict() for addon in addons],
+                "ingredients": [ing.dict() for ing in ingredients],
+                "meal_items": [meal.dict() for meal in meal_items]
+            })
+        result.append({
+            "category": await Category_Pydantic.from_tortoise_orm(category),
+            "items": items_data
+        })
+    
+    # Add "all items" section for the "All" tab
+    all_items_data = []
+    for item in all_items:
+        item_dict = await MenuItem_Pydantic.from_tortoise_orm(item)
+        # Get addons for this item via junction table
+        menu_item_addons = await MenuItemAddon.filter(menu_item=item).prefetch_related("addon")
+        addons = []
+        for mia in menu_item_addons:
+            addon = await mia.addon
+            if addon.is_available:
+                addons.append(await Addon_Pydantic.from_tortoise_orm(addon))
+        menu_item_ingredients = await MenuItemIngredient.filter(menu_item=item).prefetch_related("ingredient")
+        ingredients = [await Ingredient_Pydantic.from_tortoise_orm(mi.ingredient) for mi in menu_item_ingredients]
+        menu_item_meal_items = await MenuItemMealItem.filter(menu_item=item).prefetch_related("meal_item")
+        meal_items = []
+        for mim in menu_item_meal_items:
+            meal_item = await mim.meal_item
+            if meal_item.is_available:
+                meal_items.append(await MealItem_Pydantic.from_tortoise_orm(meal_item))
+        all_items_data.append({
+            **item_dict.dict(),
+            "addons": [addon.dict() for addon in addons],
+            "ingredients": [ing.dict() for ing in ingredients],
+            "meal_items": [meal.dict() for meal in meal_items]
+        })
+    
+    # Return categories with their items, plus all_items list, and restaurant info
+    return {
+        "categories": result,
+        "all_items": all_items_data,
+        "restaurant": await Restaurant_Pydantic.from_tortoise_orm(restaurant)
+    }
+
 @router.get("/{restaurant_id}/public")
 async def get_public_menu(restaurant_id: int):
     """Public endpoint for customers to view menu (no auth required)"""
