@@ -278,6 +278,8 @@ async def update_meal_charge(
 @router.get("/by-subdomain/{subdomain}")
 async def get_restaurant_by_subdomain(subdomain: str):
     """Get restaurant by subdomain (public endpoint)"""
+    # Normalize subdomain: lowercase and strip whitespace (subdomains are stored in lowercase)
+    subdomain = subdomain.lower().strip()
     restaurant = await Restaurant.get_or_none(subdomain=subdomain)
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found")
