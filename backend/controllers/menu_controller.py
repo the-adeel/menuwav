@@ -17,7 +17,7 @@ from models.ingredient import Ingredient, Ingredient_Pydantic
 from models.menu_item_ingredient import MenuItemIngredient
 from models.meal_item import MealItem, MealItem_Pydantic
 from models.menu_item_meal_item import MenuItemMealItem
-from models.restaurant import Restaurant
+from models.restaurant import Restaurant, Restaurant_Pydantic
 from models.user import User, Role
 from services.auth import get_current_user
 from services.menu_import import import_menu_from_excel
@@ -51,8 +51,6 @@ router = APIRouter()
 @router.get("/by-subdomain/{subdomain}/public")
 async def get_public_menu_by_subdomain(subdomain: str):
     """Public endpoint for customers to view menu by subdomain (no auth required)"""
-    # Normalize subdomain: lowercase and strip whitespace (subdomains are stored in lowercase)
-    subdomain = subdomain.lower().strip()
     restaurant = await Restaurant.get_or_none(subdomain=subdomain)
     if not restaurant:
         raise HTTPException(404, "Restaurant not found")
