@@ -427,6 +427,32 @@ def print_receipt(printer_name: str, receipt_content: str) -> tuple[bool, Option
                     print(f"Warning: Failed to delete temp file {temp_file_path}: {cleanup_error}")
                     
         elif system == "Linux":
+            # Handle PDF Printer specially - save as PDF file instead of printing
+            if printer_name == "PDF Printer" or "PDF" in printer_name.upper():
+                try:
+                    # Create PDF output directory if it doesn't exist
+                    pdf_output_dir = os.path.join(os.getcwd(), "uploads", "receipts")
+                    os.makedirs(pdf_output_dir, exist_ok=True)
+                    
+                    # Generate PDF filename with timestamp
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    pdf_filename = f"receipt_{timestamp}.txt"
+                    pdf_path = os.path.join(pdf_output_dir, pdf_filename)
+                    
+                    # Save receipt content to file
+                    with open(pdf_path, 'w', encoding='utf-8') as pdf_file:
+                        pdf_file.write(receipt_content)
+                    
+                    print(f"[PRINT] PDF saved to: {pdf_path}")
+                    return (True, None)
+                except Exception as e:
+                    return (False, f"Failed to save PDF: {str(e)}")
+            
+            # For real printers, check if lp command is available
+            if not _check_command_available("lp"):
+                return (False, "Printing not available: 'lp' command not found. Please install CUPS (sudo apt-get install cups) or use PDF Printer for saving receipts.")
+            
             # Create temporary file with receipt content (saved on server)
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as temp_file:
                 temp_file.write(receipt_content)
